@@ -82,6 +82,6 @@ Scope is a native macOS code editor. This repository currently contains only its
 ## Development configuration
 
 - Deployment target: macOS 13.0
-- Temporary bundle identifier: `com.example.Scope`
+- Temporary bundle identifier: `com.vbruk.Scope`
 
 The bundle identifier is intentionally a replaceable development value until a final reverse-DNS identifier is chosen.

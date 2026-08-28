@@ -1,12 +1,32 @@
 import SwiftUI
 
 struct ContentView: View {
+    @ObservedObject var document: EditorDocument
+
     var body: some View {
-        Text("Scope")
-            .padding()
+        Group {
+            if document.fileURL == nil {
+                Text("Open a file to start editing")
+                    .foregroundStyle(.secondary)
+            } else {
+                NativeTextEditor(
+                    text: Binding(
+                        get: { document.text },
+                        set: { document.updateText($0) }
+                    )
+                )
+            }
+        }
+        .navigationTitle(document.windowTitle)
+        .background(
+            WindowPresentation(
+                title: document.windowTitle,
+                isDocumentEdited: document.isDirty
+            )
+        )
     }
 }
 
 #Preview {
-    ContentView()
+    ContentView(document: EditorDocument())
 }
