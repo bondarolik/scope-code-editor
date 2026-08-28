@@ -2,6 +2,12 @@ import XCTest
 @testable import Scope
 
 final class ScopeTests: XCTestCase {
+    func testLineNumberMetrics() {
+        XCTAssertEqual(LineNumberMetrics.lineCount(in: ""), 1)
+        XCTAssertEqual(LineNumberMetrics.lineCount(in: "one\ntwo\nthree"), 3)
+        XCTAssertGreaterThan(LineNumberMetrics.gutterWidth(forLineCount: 1, font: .systemFont(ofSize: 11)), 0)
+        XCTAssertGreaterThan(LineNumberMetrics.gutterWidth(forLineCount: 1_000, font: .systemFont(ofSize: 11)), LineNumberMetrics.gutterWidth(forLineCount: 1, font: .systemFont(ofSize: 11)))
+    }
     func testLoadingUTF8TextStartsClean() throws {
         let url = try makeTemporaryFile(contents: "let scope = true")
         let document = EditorDocument()
