@@ -14,13 +14,6 @@
 			remoteGlobalIDString = DBC77C6D3041F9BC00FCA39E;
 			remoteInfo = Scope;
 		};
-		DBC77C863041F9BF00FCA39E /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = DBC77C663041F9BC00FCA39E /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = DBC77C6D3041F9BC00FCA39E;
-			remoteInfo = Scope;
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -50,13 +43,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		DBC77C783041F9BF00FCA39E /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		DBC77C823041F9BF00FCA39E /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -186,13 +172,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		DBC77C833041F9BF00FCA39E /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -210,13 +189,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		DBC77C813041F9BF00FCA39E /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -224,11 +196,6 @@
 			isa = PBXTargetDependency;
 			target = DBC77C6D3041F9BC00FCA39E /* Scope */;
 			targetProxy = DBC77C7C3041F9BF00FCA39E /* PBXContainerItemProxy */;
-		};
-		DBC77C873041F9BF00FCA39E /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = DBC77C6D3041F9BC00FCA39E /* Scope */;
-			targetProxy = DBC77C863041F9BF00FCA39E /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -358,17 +325,20 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Q562WKSEWB;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Scope;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.Scope;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vbruk.Scope;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -387,17 +357,20 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Q562WKSEWB;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Scope;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.Scope;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vbruk.Scope;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -449,42 +422,6 @@
 			};
 			name = Release;
 		};
-		DBC77C963041F9BF00FCA39E /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.ScopeUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Scope;
-			};
-			name = Debug;
-		};
-		DBC77C973041F9BF00FCA39E /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.ScopeUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = Scope;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -511,15 +448,6 @@
 			buildConfigurations = (
 				DBC77C933041F9BF00FCA39E /* Debug */,
 				DBC77C943041F9BF00FCA39E /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		DBC77C953041F9BF00FCA39E /* Build configuration list for PBXNativeTarget "ScopeUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				DBC77C963041F9BF00FCA39E /* Debug */,
-				DBC77C973041F9BF00FCA39E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
