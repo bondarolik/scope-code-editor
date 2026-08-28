@@ -13,7 +13,8 @@ struct ContentView: View {
                     text: Binding(
                         get: { document.text },
                         set: { document.updateText($0) }
-                    )
+                    ),
+                    language: LanguageDetector.language(for: document.fileURL)
                 )
             }
         }

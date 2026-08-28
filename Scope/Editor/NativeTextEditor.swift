@@ -1,11 +1,30 @@
 import AppKit
 import SwiftUI
 
+struct HighlightRequest {
+    let generation: Int
+    let source: String
+}
+
+struct HighlightRequestTracker {
+    private var currentGeneration = 0
+
+    mutating func makeRequest(for source: String) -> HighlightRequest {
+        currentGeneration += 1
+        return HighlightRequest(generation: currentGeneration, source: source)
+    }
+
+    func accepts(_ request: HighlightRequest, for currentSource: String) -> Bool {
+        request.generation == currentGeneration && request.source == currentSource
+    }
+}
+
 struct NativeTextEditor: NSViewRepresentable {
     @Binding var text: String
+    let language: LanguageID?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, language: language)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -23,6 +42,7 @@ struct NativeTextEditor: NSViewRepresentable {
         )
         textView.delegate = context.coordinator
         textView.string = text
+        context.coordinator.scheduleHighlight(for: textView)
         textView.isEditable = true
         textView.isSelectable = true
         textView.isRichText = false
@@ -70,9 +90,12 @@ struct NativeTextEditor: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         private var text: Binding<String>
+        private let language: LanguageID?
+        private var highlightRequests = HighlightRequestTracker()
 
-        init(text: Binding<String>) {
+        init(text: Binding<String>, language: LanguageID?) {
             self.text = text
+            self.language = language
         }
 
         func textDidChange(_ notification: Notification) {
@@ -81,7 +104,27 @@ struct NativeTextEditor: NSViewRepresentable {
             }
             text.wrappedValue = textView.string
             (textView.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?.needsDisplay = true
+            scheduleHighlight(for: textView)
         }
+
+        func scheduleHighlight(for textView: NSTextView) {
+            let source = textView.string
+            let request = highlightRequests.makeRequest(for: source)
+            guard let language else { return }
+            DispatchQueue.global(qos: .userInitiated).async { [weak self, weak textView] in
+                let spans = SyntaxHighlighter.spans(for: language, source: source)
+                DispatchQueue.main.async {
+                    guard let self, let textView, self.highlightRequests.accepts(request, for: textView.string) else { return }
+                    guard let storage = textView.textStorage else { return }
+                    let wholeRange = NSRange(location: 0, length: storage.length)
+                    storage.removeAttribute(.foregroundColor, range: wholeRange)
+                    for span in spans where NSMaxRange(span.range) <= storage.length {
+                        storage.addAttribute(.foregroundColor, value: SyntaxTheme.color(for: span.category), range: span.range)
+                    }
+                }
+            }
+        }
+
     }
 }
 

@@ -2,6 +2,33 @@ import XCTest
 @testable import Scope
 
 final class ScopeTests: XCTestCase {
+    func testRubySyntaxDetectionAndParsing() {
+        let highlighter = RubySyntaxHighlighter()
+        XCTAssertEqual(LanguageDetector.language(for: URL(fileURLWithPath: "/tmp/example.rb")), .ruby)
+        XCTAssertNil(LanguageDetector.language(for: URL(fileURLWithPath: "/tmp/example.swift")))
+        XCTAssertTrue(highlighter.canParse("class Example\n  def run\n  end\nend"))
+        XCTAssertTrue(highlighter.canParse("def incomplete("))
+
+        let spans = SyntaxHighlighter.spans(
+            for: .ruby,
+            source: "# comment\nclass Example\n  def run\n    :symbol\n  end\nend"
+        )
+        XCTAssertTrue(spans.contains { $0.category == .comment })
+        XCTAssertTrue(spans.contains { $0.category == .keyword })
+        XCTAssertTrue(spans.contains { $0.category == .symbol })
+        XCTAssertTrue(SyntaxHighlighter.spans(for: nil, source: "plain text").isEmpty)
+        XCTAssertNil(RubySyntaxHighlighter.category(for: "unknown.capture"))
+    }
+
+    func testStaleHighlightRequestsAreRejected() {
+        var tracker = HighlightRequestTracker()
+        let firstRequest = tracker.makeRequest(for: "before")
+        let latestRequest = tracker.makeRequest(for: "after")
+
+        XCTAssertFalse(tracker.accepts(firstRequest, for: "after"))
+        XCTAssertTrue(tracker.accepts(latestRequest, for: "after"))
+    }
+
     func testLineNumberMetrics() {
         XCTAssertEqual(LineNumberMetrics.lineCount(in: ""), 1)
         XCTAssertEqual(LineNumberMetrics.lineCount(in: "one\ntwo\nthree"), 3)

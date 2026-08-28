@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		DBC77CFD3042030C00FCA39E /* TreeSitterRuby in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000001 /* TreeSitterRuby */; };
+		DBC77CFE3042030C00FCA39E /* SwiftTreeSitter in Frameworks */ = {isa = PBXBuildFile; productRef = A90000000000000000000003 /* SwiftTreeSitter */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		DBC77C7C3041F9BF00FCA39E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -39,6 +44,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DBC77CFE3042030C00FCA39E /* SwiftTreeSitter in Frameworks */,
+				DBC77CFD3042030C00FCA39E /* TreeSitterRuby in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -90,6 +97,8 @@
 			);
 			name = Scope;
 			packageProductDependencies = (
+				A90000000000000000000001 /* TreeSitterRuby */,
+				A90000000000000000000003 /* SwiftTreeSitter */,
 			);
 			productName = Scope;
 			productReference = DBC77C6E3041F9BC00FCA39E /* Scope.app */;
@@ -146,6 +155,10 @@
 			);
 			mainGroup = DBC77C653041F9BC00FCA39E;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A90000000000000000000002 /* XCRemoteSwiftPackageReference "tree-sitter-ruby" */,
+				A90000000000000000000004 /* XCRemoteSwiftPackageReference "SwiftTreeSitter" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = DBC77C6F3041F9BC00FCA39E /* Products */;
 			projectDirPath = "";
@@ -453,6 +466,38 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A90000000000000000000002 /* XCRemoteSwiftPackageReference "tree-sitter-ruby" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/tree-sitter-ruby";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.21.0;
+			};
+		};
+		A90000000000000000000004 /* XCRemoteSwiftPackageReference "SwiftTreeSitter" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ChimeHQ/SwiftTreeSitter";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.8.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A90000000000000000000001 /* TreeSitterRuby */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A90000000000000000000002 /* XCRemoteSwiftPackageReference "tree-sitter-ruby" */;
+			productName = TreeSitterRuby;
+		};
+		A90000000000000000000003 /* SwiftTreeSitter */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A90000000000000000000004 /* XCRemoteSwiftPackageReference "SwiftTreeSitter" */;
+			productName = SwiftTreeSitter;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = DBC77C663041F9BC00FCA39E /* Project object */;
 }
