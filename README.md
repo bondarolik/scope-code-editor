@@ -76,3 +76,12 @@ The project name, application icon, logo, and other official branding are not gr
 ## Guiding Question
 
 > Does this make editing and navigating code faster or better without making the editor heavier?
+=======
+Scope is a native macOS code editor. This repository currently contains only its minimal SwiftUI application foundation.
+
+## Development configuration
+
+- Deployment target: macOS 13.0
+- Temporary bundle identifier: `com.example.Scope`
+
+The bundle identifier is intentionally a replaceable development value until a final reverse-DNS identifier is chosen.

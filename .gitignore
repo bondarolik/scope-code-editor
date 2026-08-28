@@ -1,0 +1,11 @@
+# Xcode user and build state
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+
+# Swift Package Manager build products (none are used yet)
+.build/
+
+# macOS metadata
+.DS_Store
