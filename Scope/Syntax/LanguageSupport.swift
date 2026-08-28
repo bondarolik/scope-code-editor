@@ -31,14 +31,18 @@ struct HighlightSpan: Equatable { let range: NSRange; let category: HighlightCat
 
 struct LanguageDefinition {
     let id: LanguageID
-    private let highlight: (String) -> [HighlightSpan]
+    private let analyze: (String) -> SyntaxAnalysis
 
     func highlightSpans(in source: String) -> [HighlightSpan] {
-        highlight(source)
+        analyze(source).highlightSpans
+    }
+
+    func analyzeSyntax(in source: String) -> SyntaxAnalysis {
+        analyze(source)
     }
 
     static let ruby = LanguageDefinition(id: .ruby) { source in
-        RubySyntaxHighlighter().highlightSpans(in: source)
+        RubySyntaxHighlighter().analyze(source)
     }
 
     static func definition(for language: LanguageID?) -> LanguageDefinition? {
@@ -63,6 +67,10 @@ enum SyntaxTheme {
 
 enum SyntaxHighlighter {
     static func spans(for language: LanguageID?, source: String) -> [HighlightSpan] {
-        LanguageDefinition.definition(for: language)?.highlightSpans(in: source) ?? []
+        analyze(language: language, source: source).highlightSpans
+    }
+
+    static func analyze(language: LanguageID?, source: String) -> SyntaxAnalysis {
+        LanguageDefinition.definition(for: language)?.analyzeSyntax(in: source) ?? .empty
     }
 }

@@ -85,7 +85,12 @@ struct NativeTextEditor: NSViewRepresentable {
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.hasVerticalRuler = true
         scrollView.rulersVisible = true
-        scrollView.verticalRulerView = LineNumberRulerView(scrollView: scrollView, textView: textView)
+        let lineNumberRuler = LineNumberRulerView(scrollView: scrollView, textView: textView)
+        lineNumberRuler.onToggleFold = { [weak textView] range in
+            guard let textView else { return }
+            context.coordinator.toggleFold(range, in: textView)
+        }
+        scrollView.verticalRulerView = lineNumberRuler
         return scrollView
     }
 
@@ -106,6 +111,8 @@ struct NativeTextEditor: NSViewRepresentable {
         private let language: LanguageID?
         private let indentationWidth: Int
         private var highlightRequests = HighlightRequestTracker()
+        private var foldRanges = [FoldRange]()
+        private var foldState = FoldState()
 
         init(
             text: Binding<String>,
@@ -124,6 +131,9 @@ struct NativeTextEditor: NSViewRepresentable {
                 return
             }
             text.wrappedValue = textView.string
+            foldState.invalidate()
+            foldRanges = []
+            applyFoldPresentation(to: textView)
             (textView.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?.needsDisplay = true
             updateStatus(from: textView)
             textView.needsDisplay = true
@@ -149,16 +159,42 @@ struct NativeTextEditor: NSViewRepresentable {
             let request = highlightRequests.makeRequest(for: source)
             guard let language else { return }
             DispatchQueue.global(qos: .userInitiated).async { [weak self, weak textView] in
-                let spans = SyntaxHighlighter.spans(for: language, source: source)
+                let analysis = SyntaxHighlighter.analyze(language: language, source: source)
                 DispatchQueue.main.async {
                     guard let self, let textView, self.highlightRequests.accepts(request, for: textView.string) else { return }
                     guard let storage = textView.textStorage else { return }
                     let wholeRange = NSRange(location: 0, length: storage.length)
                     storage.removeAttribute(.foregroundColor, range: wholeRange)
-                    for span in spans where NSMaxRange(span.range) <= storage.length {
+                    for span in analysis.highlightSpans where NSMaxRange(span.range) <= storage.length {
                         storage.addAttribute(.foregroundColor, value: SyntaxTheme.color(for: span.category), range: span.range)
                     }
+                    self.foldRanges = analysis.foldRanges
+                    self.foldState.retainOnly(analysis.foldRanges)
+                    self.applyFoldPresentation(to: textView)
                 }
+            }
+        }
+
+        func toggleFold(_ range: FoldRange, in textView: NSTextView) {
+            guard foldRanges.contains(range) else { return }
+            let willCollapse = !foldState.collapsedRanges.contains(range)
+            if willCollapse,
+               let hiddenRange = range.hiddenCharacterRange(in: textView.string),
+               NSLocationInRange(textView.selectedRange().location, hiddenRange),
+               let start = range.startCharacterLocation(in: textView.string) {
+                textView.setSelectedRange(NSRange(location: start, length: 0))
+                updateStatus(from: textView)
+            }
+            foldState.toggle(range)
+            applyFoldPresentation(to: textView)
+        }
+
+        private func applyFoldPresentation(to textView: NSTextView) {
+            guard let codeTextView = textView as? CodeTextView else { return }
+            codeTextView.applyFoldPresentation(foldState.collapsedRanges)
+            if let ruler = textView.enclosingScrollView?.verticalRulerView as? LineNumberRulerView {
+                ruler.foldRanges = foldRanges
+                ruler.collapsedFoldRanges = foldState.collapsedRanges
             }
         }
 
@@ -167,6 +203,7 @@ struct NativeTextEditor: NSViewRepresentable {
 
 private final class CodeTextView: NSTextView {
     private let indentationWidth: Int
+    private var collapsedFoldRanges = Set<FoldRange>()
 
     init(frame frameRect: NSRect, textContainer container: NSTextContainer?, indentationWidth: Int) {
         self.indentationWidth = indentationWidth
@@ -186,6 +223,32 @@ private final class CodeTextView: NSTextView {
         super.drawBackground(in: rect)
         drawCurrentLine(in: rect)
         drawPreferredColumnRuler(in: rect)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawFoldEllipses(in: dirtyRect)
+    }
+
+    func applyFoldPresentation(_ foldedRanges: Set<FoldRange>) {
+        guard let layoutManager, let textStorage else { return }
+        let wholeRange = NSRange(location: 0, length: textStorage.length)
+        layoutManager.removeTemporaryAttribute(.font, forCharacterRange: wholeRange)
+        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: wholeRange)
+        let collapsedAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 0.01, weight: .regular),
+            .foregroundColor: NSColor.clear
+        ]
+
+        for range in foldedRanges {
+            if let hiddenRange = range.hiddenCharacterRange(in: string), NSMaxRange(hiddenRange) <= textStorage.length {
+                layoutManager.setTemporaryAttributes(collapsedAttributes, forCharacterRange: hiddenRange)
+            }
+        }
+
+        collapsedFoldRanges = foldedRanges
+        needsDisplay = true
+        enclosingScrollView?.verticalRulerView?.needsDisplay = true
     }
 
     private func drawCurrentLine(in rect: NSRect) {
@@ -231,5 +294,25 @@ private final class CodeTextView: NSTextView {
         path.lineWidth = 1
         NSColor.separatorColor.withAlphaComponent(0.45).setStroke()
         path.stroke()
+    }
+
+    private func drawFoldEllipses(in dirtyRect: NSRect) {
+        guard let layoutManager else { return }
+        let font = font ?? .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        for range in collapsedFoldRanges {
+            guard let location = range.startCharacterLocation(in: string),
+                  location < (string as NSString).length else { continue }
+            let glyphIndex = layoutManager.glyphIndexForCharacter(at: location)
+            let fragment = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            let point = NSPoint(
+                x: fragment.maxX + textContainerOrigin.x + 4,
+                y: fragment.minY + textContainerOrigin.y
+            )
+            guard dirtyRect.intersects(NSRect(origin: point, size: NSSize(width: 12, height: font.boundingRectForFont.height))) else { continue }
+            ("…" as NSString).draw(
+                at: point,
+                withAttributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
+            )
+        }
     }
 }

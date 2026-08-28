@@ -20,6 +20,55 @@ final class ScopeTests: XCTestCase {
         XCTAssertNil(RubySyntaxHighlighter.category(for: "unknown.capture"))
     }
 
+    func testRubyStructuralFoldRanges() {
+        let highlighter = RubySyntaxHighlighter()
+
+        XCTAssertEqual(
+            highlighter.foldRanges(in: "def example\n  foo\nend"),
+            [FoldRange(startLine: 1, endLine: 3)]
+        )
+        XCTAssertEqual(
+            highlighter.foldRanges(in: "def foo; true; end"),
+            []
+        )
+
+        let nested = highlighter.foldRanges(in: """
+        class Example
+          def foo
+            items.each do |item|
+              process(item)
+            end
+          end
+        end
+        """)
+        XCTAssertEqual(
+            Set(nested),
+            Set([
+                FoldRange(startLine: 1, endLine: 7),
+                FoldRange(startLine: 2, endLine: 6),
+                FoldRange(startLine: 3, endLine: 5)
+            ])
+        )
+        XCTAssertTrue(highlighter.foldRanges(in: "def foo\n  something").isEmpty)
+        XCTAssertTrue(SyntaxHighlighter.analyze(language: nil, source: "plain text").foldRanges.isEmpty)
+    }
+
+    func testFoldStateAndPresentationRanges() {
+        let range = FoldRange(startLine: 1, endLine: 3)
+        let source = "def example\n  foo\nend\nafter\n"
+        XCTAssertEqual(range.hiddenCharacterRange(in: source), NSRange(location: 12, length: 10))
+        XCTAssertEqual(range.startCharacterLocation(in: source), 0)
+
+        var state = FoldState()
+        state.toggle(range)
+        XCTAssertEqual(state.collapsedRanges, [range])
+        state.retainOnly([])
+        XCTAssertTrue(state.collapsedRanges.isEmpty)
+        state.toggle(range)
+        state.invalidate()
+        XCTAssertTrue(state.collapsedRanges.isEmpty)
+    }
+
     func testStaleHighlightRequestsAreRejected() {
         var tracker = HighlightRequestTracker()
         let firstRequest = tracker.makeRequest(for: "before")
