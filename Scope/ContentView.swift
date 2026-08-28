@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var document: EditorDocument
+    @State private var editorStatus = EditorStatus()
 
     var body: some View {
         Group {
@@ -9,13 +10,26 @@ struct ContentView: View {
                 Text("Open a file to start editing")
                     .foregroundStyle(.secondary)
             } else {
-                NativeTextEditor(
-                    text: Binding(
-                        get: { document.text },
-                        set: { document.updateText($0) }
-                    ),
-                    language: LanguageDetector.language(for: document.fileURL)
-                )
+                VStack(spacing: 0) {
+                    NativeTextEditor(
+                        text: Binding(
+                            get: { document.text },
+                            set: { document.updateText($0) }
+                        ),
+                        status: $editorStatus,
+                        language: LanguageDetector.language(for: document.fileURL),
+                        indentationWidth: document.indentationWidth
+                    )
+                    .id(document.fileURL)
+
+                    EditorStatusBar(
+                        status: EditorStatus(
+                            position: editorStatus.position,
+                            languageName: LanguageDetector.language(for: document.fileURL)?.displayName ?? "Plain Text",
+                            indentationWidth: document.indentationWidth
+                        )
+                    )
+                }
             }
         }
         .navigationTitle(document.windowTitle)

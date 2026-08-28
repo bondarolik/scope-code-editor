@@ -8,7 +8,7 @@ enum LineNumberMetrics {
     static func gutterWidth(forLineCount count: Int, font: NSFont) -> CGFloat {
         let digits = max(1, String(count).count)
         let sample = String(repeating: "8", count: digits) as NSString
-        return ceil(sample.size(withAttributes: [.font: font]).width) + 16
+        return ceil(sample.size(withAttributes: [.font: font]).width) + 20
     }
 }
 
@@ -52,7 +52,7 @@ final class LineNumberRulerView: NSRulerView {
             let label = "\(lineNumber)" as NSString
             let labelSize = label.size(withAttributes: [.font: font])
             let y = lineRect.minY + textView.textContainerOrigin.y
-            label.draw(at: NSPoint(x: ruleThickness - labelSize.width - 8, y: y), withAttributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor])
+            label.draw(at: NSPoint(x: ruleThickness - labelSize.width - 10, y: y), withAttributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor])
 
             guard lineEnd > lineStart else { break }
             lineStart = lineEnd

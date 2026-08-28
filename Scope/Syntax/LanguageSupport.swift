@@ -3,6 +3,12 @@ import Foundation
 
 enum LanguageID: Equatable {
     case ruby
+
+    var displayName: String {
+        switch self {
+        case .ruby: "Ruby"
+        }
+    }
 }
 
 enum LanguageDetector {

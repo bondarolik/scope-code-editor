@@ -21,10 +21,17 @@ struct HighlightRequestTracker {
 
 struct NativeTextEditor: NSViewRepresentable {
     @Binding var text: String
+    @Binding var status: EditorStatus
     let language: LanguageID?
+    let indentationWidth: Int
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, language: language)
+        Coordinator(
+            text: $text,
+            status: $status,
+            language: language,
+            indentationWidth: indentationWidth
+        )
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -33,16 +40,19 @@ struct NativeTextEditor: NSViewRepresentable {
         textContentStorage.addTextLayoutManager(textLayoutManager)
 
         let textContainer = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
-        textContainer.widthTracksTextView = false
+        textContainer.widthTracksTextView = true
         textLayoutManager.textContainer = textContainer
 
         let textView = CodeTextView(
             frame: NSRect(x: 0, y: 0, width: 600, height: 400),
-            textContainer: textContainer
+            textContainer: textContainer,
+            indentationWidth: indentationWidth
         )
         textView.delegate = context.coordinator
         textView.string = text
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
         context.coordinator.scheduleHighlight(for: textView)
+        context.coordinator.updateStatus(from: textView)
         textView.isEditable = true
         textView.isSelectable = true
         textView.isRichText = false
@@ -63,13 +73,13 @@ struct NativeTextEditor: NSViewRepresentable {
             height: CGFloat.greatestFiniteMagnitude
         )
         textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = true
-        textView.autoresizingMask = []
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
 
         let scrollView = NSScrollView()
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = true
+        scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.contentView.postsBoundsChangedNotifications = true
@@ -86,16 +96,27 @@ struct NativeTextEditor: NSViewRepresentable {
         }
         textView.string = text
         scrollView.verticalRulerView?.needsDisplay = true
+        context.coordinator.updateStatus(from: textView)
+        context.coordinator.scheduleHighlight(for: textView)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         private var text: Binding<String>
+        private var status: Binding<EditorStatus>
         private let language: LanguageID?
+        private let indentationWidth: Int
         private var highlightRequests = HighlightRequestTracker()
 
-        init(text: Binding<String>, language: LanguageID?) {
+        init(
+            text: Binding<String>,
+            status: Binding<EditorStatus>,
+            language: LanguageID?,
+            indentationWidth: Int
+        ) {
             self.text = text
+            self.status = status
             self.language = language
+            self.indentationWidth = indentationWidth
         }
 
         func textDidChange(_ notification: Notification) {
@@ -104,7 +125,23 @@ struct NativeTextEditor: NSViewRepresentable {
             }
             text.wrappedValue = textView.string
             (textView.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?.needsDisplay = true
+            updateStatus(from: textView)
+            textView.needsDisplay = true
             scheduleHighlight(for: textView)
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            updateStatus(from: textView)
+            textView.needsDisplay = true
+        }
+
+        func updateStatus(from textView: NSTextView) {
+            status.wrappedValue = EditorStatus(
+                position: EditorPosition.at(utf16Offset: textView.selectedRange().location, in: textView.string),
+                languageName: language?.displayName ?? "Plain Text",
+                indentationWidth: indentationWidth
+            )
         }
 
         func scheduleHighlight(for textView: NSTextView) {
@@ -129,7 +166,70 @@ struct NativeTextEditor: NSViewRepresentable {
 }
 
 private final class CodeTextView: NSTextView {
+    private let indentationWidth: Int
+
+    init(frame frameRect: NSRect, textContainer container: NSTextContainer?, indentationWidth: Int) {
+        self.indentationWidth = indentationWidth
+        super.init(frame: frameRect, textContainer: container)
+    }
+
+    required init?(coder: NSCoder) {
+        indentationWidth = EditorConfiguration.defaultIndentationWidth
+        super.init(coder: coder)
+    }
+
     override func insertTab(_ sender: Any?) {
-        insertText("  ", replacementRange: selectedRange())
+        insertText(String(repeating: " ", count: indentationWidth), replacementRange: selectedRange())
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        drawCurrentLine(in: rect)
+        drawPreferredColumnRuler(in: rect)
+    }
+
+    private func drawCurrentLine(in rect: NSRect) {
+        guard let layoutManager, textContainer != nil else { return }
+        let characterCount = (string as NSString).length
+        let lineRect: NSRect
+
+        if characterCount == 0 || layoutManager.numberOfGlyphs == 0 {
+            lineRect = NSRect(
+                x: visibleRect.minX,
+                y: textContainerOrigin.y,
+                width: visibleRect.width,
+                height: font?.boundingRectForFont.height ?? 16
+            )
+        } else {
+            let selectedLocation = selectedRange().location
+            let fragment: NSRect
+            if selectedLocation == characterCount, !layoutManager.extraLineFragmentRect.isEmpty {
+                fragment = layoutManager.extraLineFragmentRect
+            } else {
+                let location = min(selectedLocation, characterCount - 1)
+                let glyphIndex = layoutManager.glyphIndexForCharacter(at: location)
+                fragment = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            }
+            lineRect = NSRect(
+                x: visibleRect.minX,
+                y: fragment.minY + textContainerOrigin.y,
+                width: visibleRect.width,
+                height: fragment.height
+            )
+        }
+
+        NSColor.controlAccentColor.withAlphaComponent(0.055).setFill()
+        lineRect.intersection(rect).fill()
+    }
+
+    private func drawPreferredColumnRuler(in rect: NSRect) {
+        let font = font ?? .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        let x = textContainerOrigin.x + (font.maximumAdvancement.width * CGFloat(EditorConfiguration.preferredColumn))
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: x, y: rect.minY))
+        path.line(to: NSPoint(x: x, y: rect.maxY))
+        path.lineWidth = 1
+        NSColor.separatorColor.withAlphaComponent(0.45).setStroke()
+        path.stroke()
     }
 }

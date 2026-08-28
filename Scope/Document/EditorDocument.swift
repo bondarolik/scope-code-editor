@@ -18,6 +18,7 @@ enum EditorDocumentError: LocalizedError, Equatable {
 final class EditorDocument: ObservableObject {
     @Published private(set) var fileURL: URL?
     @Published private(set) var text = ""
+    @Published private(set) var indentationWidth = EditorConfiguration.defaultIndentationWidth
     private var savedText = ""
 
     @Published private(set) var isDirty = false
@@ -38,6 +39,7 @@ final class EditorDocument: ObservableObject {
 
         fileURL = url
         text = decodedText
+        indentationWidth = IndentationDetector.width(in: decodedText)
         savedText = decodedText
         isDirty = false
     }

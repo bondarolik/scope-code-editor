@@ -29,6 +29,29 @@ final class ScopeTests: XCTestCase {
         XCTAssertTrue(tracker.accepts(latestRequest, for: "after"))
     }
 
+    func testIndentationDetection() {
+        XCTAssertEqual(IndentationDetector.width(in: "class Example\n  def call\n    true\n  end\nend"), 2)
+        XCTAssertEqual(IndentationDetector.width(in: "root\n    child\n        nested"), 4)
+        XCTAssertEqual(IndentationDetector.width(in: "root\n        child\n                nested"), 8)
+        XCTAssertEqual(IndentationDetector.width(in: "root\n    \n    child\n        nested"), 4)
+        XCTAssertEqual(IndentationDetector.width(in: "root\nchild"), 2)
+
+        let tabs = "root\n\tchild\n\t\tnested"
+        XCTAssertEqual(IndentationDetector.width(in: tabs), 2)
+        XCTAssertEqual(tabs, "root\n\tchild\n\t\tnested")
+    }
+
+    func testEditorPosition() {
+        XCTAssertEqual(EditorPosition.at(utf16Offset: 0, in: ""), .beginning)
+        XCTAssertEqual(EditorPosition.at(utf16Offset: 0, in: "one\ntwo"), EditorPosition(line: 1, column: 1))
+        XCTAssertEqual(EditorPosition.at(utf16Offset: 3, in: "one\ntwo"), EditorPosition(line: 1, column: 4))
+        XCTAssertEqual(EditorPosition.at(utf16Offset: 4, in: "one\ntwo"), EditorPosition(line: 2, column: 1))
+        XCTAssertEqual(EditorPosition.at(utf16Offset: 4, in: "one\n\ntwo"), EditorPosition(line: 2, column: 1))
+        XCTAssertEqual(EditorPosition.at(utf16Offset: 5, in: "one\n\ntwo"), EditorPosition(line: 3, column: 1))
+        XCTAssertEqual(EditorPosition.at(utf16Offset: 3, in: "a😀b"), EditorPosition(line: 1, column: 3))
+        XCTAssertEqual(EditorPosition.at(utf16Offset: 2, in: "a😀b"), EditorPosition(line: 1, column: 2))
+    }
+
     func testLineNumberMetrics() {
         XCTAssertEqual(LineNumberMetrics.lineCount(in: ""), 1)
         XCTAssertEqual(LineNumberMetrics.lineCount(in: "one\ntwo\nthree"), 3)
@@ -59,6 +82,19 @@ final class ScopeTests: XCTestCase {
 
         XCTAssertFalse(document.isDirty)
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "after")
+    }
+
+    func testLoadingAndSavingPreservesExistingTabs() throws {
+        let contents = "root\n\tchild\n\t\tnested\n"
+        let url = try makeTemporaryFile(contents: contents)
+        let document = EditorDocument()
+
+        try document.load(from: url)
+        try document.save()
+
+        XCTAssertEqual(document.text, contents)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), contents)
+        XCTAssertEqual(document.indentationWidth, 2)
     }
 
     func testLoadingNonUTF8DataThrowsAnError() throws {
