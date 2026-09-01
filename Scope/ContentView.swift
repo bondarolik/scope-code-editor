@@ -20,7 +20,7 @@ struct ContentView: View {
                         language: LanguageDetector.language(for: document.fileURL),
                         indentationWidth: document.indentationWidth
                     )
-                    .id(document.fileURL)
+                    .id(document.presentationGeneration)
 
                     EditorStatusBar(
                         status: EditorStatus(
