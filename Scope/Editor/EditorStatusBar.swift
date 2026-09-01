@@ -10,21 +10,21 @@ struct EditorStatusBar: View {
     let status: EditorStatus
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: EditorConfiguration.StatusBar.fieldSpacing) {
             Text("Line \(status.position.line), Column \(status.position.column)")
             Spacer()
             Text(status.languageName)
             Text("Spaces: \(status.indentationWidth)")
         }
-        .font(.system(size: 11))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .frame(height: 24)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .font(.system(size: EditorConfiguration.StatusBar.fontSize))
+        .foregroundStyle(Color(nsColor: ScopeLightPalette.statusText))
+        .padding(.horizontal, EditorConfiguration.StatusBar.horizontalPadding)
+        .frame(height: EditorConfiguration.StatusBar.height)
+        .background(Color(nsColor: ScopeLightPalette.statusBackground))
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(height: 1)
+                .fill(Color(nsColor: ScopeLightPalette.statusSeparator))
+                .frame(height: EditorConfiguration.StatusBar.separatorHeight)
         }
     }
 }

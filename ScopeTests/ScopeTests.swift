@@ -104,8 +104,71 @@ final class ScopeTests: XCTestCase {
     func testLineNumberMetrics() {
         XCTAssertEqual(LineNumberMetrics.lineCount(in: ""), 1)
         XCTAssertEqual(LineNumberMetrics.lineCount(in: "one\ntwo\nthree"), 3)
-        XCTAssertGreaterThan(LineNumberMetrics.gutterWidth(forLineCount: 1, font: .systemFont(ofSize: 11)), 0)
-        XCTAssertGreaterThan(LineNumberMetrics.gutterWidth(forLineCount: 1_000, font: .systemFont(ofSize: 11)), LineNumberMetrics.gutterWidth(forLineCount: 1, font: .systemFont(ofSize: 11)))
+        let font = EditorConfiguration.Gutter.font
+        let singleDigitWidth = LineNumberMetrics.gutterWidth(forLineCount: 9, font: font)
+        XCTAssertEqual(singleDigitWidth, LineNumberMetrics.gutterWidth(forLineCount: 1, font: font))
+        XCTAssertGreaterThan(LineNumberMetrics.gutterWidth(forLineCount: 10, font: font), singleDigitWidth)
+        XCTAssertGreaterThan(LineNumberMetrics.gutterWidth(forLineCount: 1_000, font: font), singleDigitWidth)
+    }
+
+    func testGutterGeometryKeepsMarkerAndNumberZonesSeparateAcrossDigitTransitions() {
+        let font = EditorConfiguration.Gutter.font
+        let counts = [9, 10, 99, 100]
+        let geometries = counts.map { LineNumberMetrics.gutterGeometry(forLineCount: $0, font: font) }
+
+        XCTAssertTrue(geometries.allSatisfy { $0.markerZone.width == EditorConfiguration.Gutter.markerZoneWidth })
+        XCTAssertTrue(geometries.allSatisfy { $0.markerOriginX == geometries[0].markerOriginX })
+        XCTAssertTrue(geometries.allSatisfy { $0.lineNumberZone.minX == $0.markerZone.maxX })
+        XCTAssertTrue(geometries.allSatisfy { $0.separatorZone.width == EditorConfiguration.Gutter.separatorZoneWidth })
+
+        for (count, geometry) in zip(counts, geometries) {
+            let label = String(count) as NSString
+            let labelWidth = ceil(label.size(withAttributes: [.font: font]).width)
+            XCTAssertEqual(
+                geometry.lineNumberOriginX(for: labelWidth),
+                geometry.markerZone.maxX + EditorConfiguration.Gutter.markerToNumberSpacing,
+                accuracy: 0.001
+            )
+        }
+    }
+
+    func testEditorPresentationConfiguration() {
+        XCTAssertEqual(EditorConfiguration.preferredColumn, 80)
+        XCTAssertEqual(EditorConfiguration.Text.fontSize, 14)
+        XCTAssertEqual(EditorConfiguration.Text.font.pointSize, 14)
+        XCTAssertGreaterThan(EditorConfiguration.StatusBar.height, 0)
+        XCTAssertGreaterThan(EditorConfiguration.Gutter.horizontalChromeWidth, 0)
+
+        let font = EditorConfiguration.Text.font
+        XCTAssertEqual(
+            EditorConfiguration.preferredColumnX(textContainerOriginX: 12, font: font),
+            12 + font.maximumAdvancement.width * 80,
+            accuracy: 0.001
+        )
+    }
+
+    func testScopeLightPaletteResolvesEveryHighlightCategory() {
+        let categories: [HighlightCategory] = [.keyword, .comment, .string, .number, .constant, .function, .symbol]
+        for category in categories {
+            XCTAssertNotNil(SyntaxTheme.color(for: category).usingColorSpace(.sRGB))
+        }
+    }
+
+    func testLargeRubyFixtureAnalysisRemainsStructural() {
+        let source = (1...750).map { index in
+            """
+            def fixture_\(index)
+              puts \"fixture \(index)\"
+            end
+            # fixture \(index)
+            """
+        }.joined(separator: "\n")
+
+        XCTAssertEqual(source.split(separator: "\n").count, 3_000)
+        let analysis = SyntaxHighlighter.analyze(language: .ruby, source: source)
+        XCTAssertEqual(analysis.foldRanges.count, 750)
+        XCTAssertFalse(analysis.highlightSpans.isEmpty)
+        XCTAssertEqual(source.split(separator: "\n").count, 3_000)
     }
     func testLoadingUTF8TextStartsClean() throws {
         let url = try makeTemporaryFile(contents: "let scope = true")

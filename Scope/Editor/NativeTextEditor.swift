@@ -65,8 +65,11 @@ struct NativeTextEditor: NSViewRepresentable {
         textView.isAutomaticLinkDetectionEnabled = false
         textView.isAutomaticDataDetectionEnabled = false
         textView.isAutomaticTextCompletionEnabled = false
-        textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        textView.textContainerInset = NSSize(width: 10, height: 10)
+        textView.font = EditorConfiguration.Text.font
+        textView.textContainerInset = NSSize(
+            width: EditorConfiguration.Text.horizontalInset,
+            height: EditorConfiguration.Text.verticalInset
+        )
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
@@ -236,7 +239,7 @@ private final class CodeTextView: NSTextView {
         layoutManager.removeTemporaryAttribute(.font, forCharacterRange: wholeRange)
         layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: wholeRange)
         let collapsedAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 0.01, weight: .regular),
+            .font: NSFont.monospacedSystemFont(ofSize: EditorConfiguration.Text.collapsedFontSize, weight: .regular),
             .foregroundColor: NSColor.clear
         ]
 
@@ -261,7 +264,7 @@ private final class CodeTextView: NSTextView {
                 x: visibleRect.minX,
                 y: textContainerOrigin.y,
                 width: visibleRect.width,
-                height: font?.boundingRectForFont.height ?? 16
+                height: font?.boundingRectForFont.height ?? EditorConfiguration.Text.font.boundingRectForFont.height
             )
         } else {
             let selectedLocation = selectedRange().location
@@ -281,37 +284,40 @@ private final class CodeTextView: NSTextView {
             )
         }
 
-        NSColor.controlAccentColor.withAlphaComponent(0.055).setFill()
+        ScopeLightPalette.currentLine.setFill()
         lineRect.intersection(rect).fill()
     }
 
     private func drawPreferredColumnRuler(in rect: NSRect) {
-        let font = font ?? .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        let x = textContainerOrigin.x + (font.maximumAdvancement.width * CGFloat(EditorConfiguration.preferredColumn))
+        let font = font ?? EditorConfiguration.Text.font
+        let x = EditorConfiguration.preferredColumnX(textContainerOriginX: textContainerOrigin.x, font: font)
         let path = NSBezierPath()
         path.move(to: NSPoint(x: x, y: rect.minY))
         path.line(to: NSPoint(x: x, y: rect.maxY))
-        path.lineWidth = 1
-        NSColor.separatorColor.withAlphaComponent(0.45).setStroke()
+        path.lineWidth = EditorConfiguration.Ruler.lineWidth
+        ScopeLightPalette.preferredColumnRuler.setStroke()
         path.stroke()
     }
 
     private func drawFoldEllipses(in dirtyRect: NSRect) {
         guard let layoutManager else { return }
-        let font = font ?? .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        let font = font ?? EditorConfiguration.Text.font
         for range in collapsedFoldRanges {
             guard let location = range.startCharacterLocation(in: string),
                   location < (string as NSString).length else { continue }
             let glyphIndex = layoutManager.glyphIndexForCharacter(at: location)
             let fragment = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphIndex, effectiveRange: nil)
             let point = NSPoint(
-                x: fragment.maxX + textContainerOrigin.x + 4,
+                x: fragment.maxX + textContainerOrigin.x + EditorConfiguration.Folding.ellipsisTrailingOffset,
                 y: fragment.minY + textContainerOrigin.y
             )
-            guard dirtyRect.intersects(NSRect(origin: point, size: NSSize(width: 12, height: font.boundingRectForFont.height))) else { continue }
+            guard dirtyRect.intersects(NSRect(
+                origin: point,
+                size: NSSize(width: EditorConfiguration.Folding.ellipsisWidth, height: font.boundingRectForFont.height)
+            )) else { continue }
             ("…" as NSString).draw(
                 at: point,
-                withAttributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
+                withAttributes: [.font: font, .foregroundColor: ScopeLightPalette.foldEllipsis]
             )
         }
     }
