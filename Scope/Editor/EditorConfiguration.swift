@@ -7,6 +7,7 @@ enum EditorConfiguration {
 
     enum Text {
         static let fontSize: CGFloat = 14
+        static let lineHeight: CGFloat = 20
         static let horizontalInset: CGFloat = 12
         static let verticalInset: CGFloat = 9
 

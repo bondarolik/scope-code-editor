@@ -95,7 +95,7 @@ struct FoldedTextProjection {
     }
 
     func presentationLocation(forSourceLocation location: Int) -> Int? {
-        guard let segment = segments.first(where: { NSLocationInRange(location, $0.sourceRange) || location == $0.sourceRange.upperBound }) else {
+        guard let segment = segments.first(where: { NSLocationInRange(location, $0.sourceRange) }) ?? segments.first(where: { location == $0.sourceRange.upperBound }) else {
             return nil
         }
         switch segment.kind {

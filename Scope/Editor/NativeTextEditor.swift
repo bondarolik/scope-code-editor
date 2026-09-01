@@ -278,6 +278,14 @@ final class CodeTextView: NSTextView {
         isApplyingProjection = true
         undoManager?.disableUndoRegistration()
         string = projection.presentation
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.minimumLineHeight = EditorConfiguration.Text.lineHeight
+        paragraphStyle.maximumLineHeight = EditorConfiguration.Text.lineHeight
+        textStorage?.addAttribute(
+            .paragraphStyle,
+            value: paragraphStyle,
+            range: NSRange(location: 0, length: (projection.presentation as NSString).length)
+        )
         undoManager?.enableUndoRegistration()
         setSelectedRange(NSRange(location: presentationLocation, length: 0))
         isApplyingProjection = false
