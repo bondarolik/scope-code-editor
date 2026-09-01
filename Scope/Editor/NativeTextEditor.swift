@@ -34,7 +34,7 @@ struct NativeTextEditor: NSViewRepresentable {
         )
     }
 
-    func makeNSView(context: Context) -> NSScrollView {
+    func makeNSView(context: Context) -> EditorGutterContainerView {
         let textContentStorage = NSTextContentStorage()
         let textLayoutManager = NSTextLayoutManager()
         textContentStorage.addTextLayoutManager(textLayoutManager)
@@ -49,7 +49,7 @@ struct NativeTextEditor: NSViewRepresentable {
             indentationWidth: indentationWidth
         )
         textView.delegate = context.coordinator
-        textView.string = text
+        textView.applyProjection(source: text, collapsedRanges: [])
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         context.coordinator.scheduleHighlight(for: textView)
         context.coordinator.updateStatus(from: textView)
@@ -86,24 +86,22 @@ struct NativeTextEditor: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.contentView.postsBoundsChangedNotifications = true
-        scrollView.hasVerticalRuler = true
-        scrollView.rulersVisible = true
-        let lineNumberRuler = LineNumberRulerView(scrollView: scrollView, textView: textView)
-        lineNumberRuler.onToggleFold = { [weak textView] range in
+        let gutterView = EditorGutterView(scrollView: scrollView, textView: textView)
+        gutterView.onToggleFold = { [weak textView] range in
             guard let textView else { return }
             context.coordinator.toggleFold(range, in: textView)
         }
-        scrollView.verticalRulerView = lineNumberRuler
-        return scrollView
+        return EditorGutterContainerView(scrollView: scrollView, gutterView: gutterView)
     }
 
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        guard let textView = scrollView.documentView as? NSTextView,
-              textView.string != text else {
+    func updateNSView(_ containerView: EditorGutterContainerView, context: Context) {
+        let scrollView = containerView.scrollView
+        guard let textView = scrollView.documentView as? CodeTextView,
+              textView.canonicalSource != text else {
             return
         }
-        textView.string = text
-        scrollView.verticalRulerView?.needsDisplay = true
+        textView.applyProjection(source: text, collapsedRanges: [])
+        containerView.gutterView.updateSourceText(text)
         context.coordinator.updateStatus(from: textView)
         context.coordinator.scheduleHighlight(for: textView)
     }
@@ -116,6 +114,8 @@ struct NativeTextEditor: NSViewRepresentable {
         private var highlightRequests = HighlightRequestTracker()
         private var foldRanges = [FoldRange]()
         private var foldState = FoldState()
+        private var highlightSpans = [HighlightSpan]()
+        private var pendingSourceEdit: (range: NSRange, replacement: String)?
 
         init(
             text: Binding<String>,
@@ -130,49 +130,64 @@ struct NativeTextEditor: NSViewRepresentable {
         }
 
         func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else {
+            guard let textView = notification.object as? CodeTextView,
+                  !textView.isApplyingProjection,
+                  let pendingSourceEdit else {
                 return
             }
-            text.wrappedValue = textView.string
+            self.pendingSourceEdit = nil
+            let updatedSource = (textView.canonicalSource as NSString).replacingCharacters(in: pendingSourceEdit.range, with: pendingSourceEdit.replacement)
+            text.wrappedValue = updatedSource
+            textView.applyProjection(source: updatedSource, collapsedRanges: [])
+            gutter(for: textView)?.updateSourceText(updatedSource)
             foldState.invalidate()
             foldRanges = []
+            highlightSpans = []
             applyFoldPresentation(to: textView)
-            (textView.enclosingScrollView?.verticalRulerView as? LineNumberRulerView)?.needsDisplay = true
+            gutter(for: textView)?.needsDisplay = true
             updateStatus(from: textView)
             textView.needsDisplay = true
             scheduleHighlight(for: textView)
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            guard let codeTextView = textView as? CodeTextView,
+                  let sourceRange = codeTextView.editableSourceRange(forPresentationRange: affectedCharRange) else {
+                return false
+            }
+            pendingSourceEdit = (sourceRange, replacementString ?? "")
+            return true
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             updateStatus(from: textView)
             textView.needsDisplay = true
+            gutter(for: textView)?.needsDisplay = true
         }
 
         func updateStatus(from textView: NSTextView) {
+            let sourceLocation = (textView as? CodeTextView)?.sourceLocation(forPresentationLocation: textView.selectedRange().location) ?? textView.selectedRange().location
             status.wrappedValue = EditorStatus(
-                position: EditorPosition.at(utf16Offset: textView.selectedRange().location, in: textView.string),
+                position: EditorPosition.at(utf16Offset: sourceLocation, in: (textView as? CodeTextView)?.canonicalSource ?? textView.string),
                 languageName: language?.displayName ?? "Plain Text",
                 indentationWidth: indentationWidth
             )
         }
 
         func scheduleHighlight(for textView: NSTextView) {
-            let source = textView.string
+            let source = (textView as? CodeTextView)?.canonicalSource ?? textView.string
             let request = highlightRequests.makeRequest(for: source)
             guard let language else { return }
             DispatchQueue.global(qos: .userInitiated).async { [weak self, weak textView] in
                 let analysis = SyntaxHighlighter.analyze(language: language, source: source)
                 DispatchQueue.main.async {
-                    guard let self, let textView, self.highlightRequests.accepts(request, for: textView.string) else { return }
-                    guard let storage = textView.textStorage else { return }
-                    let wholeRange = NSRange(location: 0, length: storage.length)
-                    storage.removeAttribute(.foregroundColor, range: wholeRange)
-                    for span in analysis.highlightSpans where NSMaxRange(span.range) <= storage.length {
-                        storage.addAttribute(.foregroundColor, value: SyntaxTheme.color(for: span.category), range: span.range)
-                    }
+                    guard let self, let textView,
+                          let codeTextView = textView as? CodeTextView,
+                          self.highlightRequests.accepts(request, for: codeTextView.canonicalSource) else { return }
                     self.foldRanges = analysis.foldRanges
                     self.foldState.retainOnly(analysis.foldRanges)
+                    self.highlightSpans = analysis.highlightSpans
                     self.applyFoldPresentation(to: textView)
                 }
             }
@@ -182,10 +197,12 @@ struct NativeTextEditor: NSViewRepresentable {
             guard foldRanges.contains(range) else { return }
             let willCollapse = !foldState.collapsedRanges.contains(range)
             if willCollapse,
-               let hiddenRange = range.hiddenCharacterRange(in: textView.string),
-               NSLocationInRange(textView.selectedRange().location, hiddenRange),
-               let start = range.startCharacterLocation(in: textView.string) {
-                textView.setSelectedRange(NSRange(location: start, length: 0))
+               let sourceLocation = (textView as? CodeTextView)?.sourceLocation(forPresentationLocation: textView.selectedRange().location),
+               let hiddenRange = range.hiddenCharacterRange(in: (textView as? CodeTextView)?.canonicalSource ?? textView.string),
+               NSLocationInRange(sourceLocation, hiddenRange),
+               let start = range.startCharacterLocation(in: (textView as? CodeTextView)?.canonicalSource ?? textView.string),
+               let presentationStart = (textView as? CodeTextView)?.presentationLocation(forSourceLocation: start) {
+                textView.setSelectedRange(NSRange(location: presentationStart, length: 0))
                 updateStatus(from: textView)
             }
             foldState.toggle(range)
@@ -194,19 +211,45 @@ struct NativeTextEditor: NSViewRepresentable {
 
         private func applyFoldPresentation(to textView: NSTextView) {
             guard let codeTextView = textView as? CodeTextView else { return }
-            codeTextView.applyFoldPresentation(foldState.collapsedRanges)
-            if let ruler = textView.enclosingScrollView?.verticalRulerView as? LineNumberRulerView {
-                ruler.foldRanges = foldRanges
-                ruler.collapsedFoldRanges = foldState.collapsedRanges
+            codeTextView.applyProjection(source: codeTextView.canonicalSource, collapsedRanges: foldState.collapsedRanges)
+            applyHighlighting(highlightSpans, to: codeTextView)
+            if let gutter = gutter(for: textView) {
+                gutter.foldRanges = foldRanges
+                gutter.collapsedFoldRanges = foldState.collapsedRanges
+            }
+        }
+
+        private func gutter(for textView: NSTextView) -> EditorGutterView? {
+            (textView.enclosingScrollView?.superview as? EditorGutterContainerView)?.gutterView
+        }
+
+        private func applyHighlighting(_ spans: [HighlightSpan], to textView: CodeTextView) {
+            guard let storage = textView.textStorage else { return }
+            let wholeRange = NSRange(location: 0, length: storage.length)
+            storage.removeAttribute(.foregroundColor, range: wholeRange)
+            for span in spans {
+                for range in textView.presentationRanges(forSourceRange: span.range) {
+                    storage.addAttribute(.foregroundColor, value: SyntaxTheme.color(for: span.category), range: range)
+                }
+            }
+            for summary in textView.foldedSummaries {
+                storage.addAttribute(.foregroundColor, value: ScopeLightPalette.foldEllipsis, range: summary.ellipsisRange)
+                if let closingRange = summary.closingTokenRange {
+                    storage.addAttribute(.foregroundColor, value: ScopeLightPalette.keyword, range: closingRange)
+                }
             }
         }
 
     }
 }
 
-private final class CodeTextView: NSTextView {
+final class CodeTextView: NSTextView {
     private let indentationWidth: Int
-    private var collapsedFoldRanges = Set<FoldRange>()
+    private(set) var projection = FoldedTextProjection(source: "", collapsedRanges: [])
+    private(set) var isApplyingProjection = false
+
+    var canonicalSource: String { projection.source }
+    var foldedSummaries: [FoldedTextProjection.Summary] { projection.summaries }
 
     init(frame frameRect: NSRect, textContainer container: NSTextContainer?, indentationWidth: Int) {
         self.indentationWidth = indentationWidth
@@ -228,30 +271,34 @@ private final class CodeTextView: NSTextView {
         drawPreferredColumnRuler(in: rect)
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        drawFoldEllipses(in: dirtyRect)
+    func applyProjection(source: String, collapsedRanges: Set<FoldRange>) {
+        let selectedSourceLocation = projection.sourceLocation(forPresentationLocation: selectedRange().location)
+        projection = FoldedTextProjection(source: source, collapsedRanges: collapsedRanges)
+        let presentationLocation = projection.presentationLocation(forSourceLocation: selectedSourceLocation) ?? 0
+        isApplyingProjection = true
+        undoManager?.disableUndoRegistration()
+        string = projection.presentation
+        undoManager?.enableUndoRegistration()
+        setSelectedRange(NSRange(location: presentationLocation, length: 0))
+        isApplyingProjection = false
+        needsDisplay = true
+        (enclosingScrollView?.superview as? EditorGutterContainerView)?.gutterView.needsDisplay = true
     }
 
-    func applyFoldPresentation(_ foldedRanges: Set<FoldRange>) {
-        guard let layoutManager, let textStorage else { return }
-        let wholeRange = NSRange(location: 0, length: textStorage.length)
-        layoutManager.removeTemporaryAttribute(.font, forCharacterRange: wholeRange)
-        layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: wholeRange)
-        let collapsedAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: EditorConfiguration.Text.collapsedFontSize, weight: .regular),
-            .foregroundColor: NSColor.clear
-        ]
+    func sourceLocation(forPresentationLocation location: Int) -> Int {
+        projection.sourceLocation(forPresentationLocation: location)
+    }
 
-        for range in foldedRanges {
-            if let hiddenRange = range.hiddenCharacterRange(in: string), NSMaxRange(hiddenRange) <= textStorage.length {
-                layoutManager.setTemporaryAttributes(collapsedAttributes, forCharacterRange: hiddenRange)
-            }
-        }
+    func presentationLocation(forSourceLocation location: Int) -> Int? {
+        projection.presentationLocation(forSourceLocation: location)
+    }
 
-        collapsedFoldRanges = foldedRanges
-        needsDisplay = true
-        enclosingScrollView?.verticalRulerView?.needsDisplay = true
+    func editableSourceRange(forPresentationRange range: NSRange) -> NSRange? {
+        projection.editableSourceRange(forPresentationRange: range)
+    }
+
+    func presentationRanges(forSourceRange range: NSRange) -> [NSRange] {
+        projection.presentationRanges(forSourceRange: range)
     }
 
     private func drawCurrentLine(in rect: NSRect) {
@@ -299,26 +346,4 @@ private final class CodeTextView: NSTextView {
         path.stroke()
     }
 
-    private func drawFoldEllipses(in dirtyRect: NSRect) {
-        guard let layoutManager else { return }
-        let font = font ?? EditorConfiguration.Text.font
-        for range in collapsedFoldRanges {
-            guard let location = range.startCharacterLocation(in: string),
-                  location < (string as NSString).length else { continue }
-            let glyphIndex = layoutManager.glyphIndexForCharacter(at: location)
-            let fragment = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphIndex, effectiveRange: nil)
-            let point = NSPoint(
-                x: fragment.maxX + textContainerOrigin.x + EditorConfiguration.Folding.ellipsisTrailingOffset,
-                y: fragment.minY + textContainerOrigin.y
-            )
-            guard dirtyRect.intersects(NSRect(
-                origin: point,
-                size: NSSize(width: EditorConfiguration.Folding.ellipsisWidth, height: font.boundingRectForFont.height)
-            )) else { continue }
-            ("…" as NSString).draw(
-                at: point,
-                withAttributes: [.font: font, .foregroundColor: ScopeLightPalette.foldEllipsis]
-            )
-        }
-    }
 }

@@ -9,7 +9,6 @@ enum EditorConfiguration {
         static let fontSize: CGFloat = 14
         static let horizontalInset: CGFloat = 12
         static let verticalInset: CGFloat = 9
-        static let collapsedFontSize: CGFloat = 0.01
 
         static var font: NSFont {
             .monospacedSystemFont(ofSize: fontSize, weight: .regular)
@@ -17,25 +16,28 @@ enum EditorConfiguration {
     }
 
     enum Gutter {
-        static let fontSize: CGFloat = 11
-        static let markerZoneWidth: CGFloat = 18
-        static let markerWidth: CGFloat = 10
-        static let markerToNumberSpacing: CGFloat = 4
-        static let numberTrailingPadding: CGFloat = 8
-        static let separatorZoneWidth: CGFloat = 1
-        static let disclosureHitExpansion: CGFloat = 3
+        static let lineNumberMinimumDigits = 4
+        static let lineNumberLeadingPadding: CGFloat = 4
+        static let lineNumberTrailingPadding: CGFloat = 4
+        static let foldMarkerGap: CGFloat = 2
+        static let foldMarkerZoneWidth: CGFloat = 18
+        static let foldMarkerWidth: CGFloat = 12
+        static let gutterTrailingPadding: CGFloat = 4
+        static let gutterSeparatorWidth: CGFloat = 1
+        static let disclosureHitExpansion: CGFloat = 5
         static let separatorPixelOffset: CGFloat = 0.5
-        static let collapsedTriangleLeadingInset: CGFloat = 3
-        static let collapsedTriangleVerticalInset: CGFloat = 2
-        static let expandedTriangleHorizontalInset: CGFloat = 2
-        static let expandedTriangleTopInset: CGFloat = 3
+        static let collapsedTriangleLeadingInset: CGFloat = 2
+        static let collapsedTriangleVerticalInset: CGFloat = 1
+        static let expandedTriangleHorizontalInset: CGFloat = 1
+        static let expandedTriangleTopInset: CGFloat = 2
+        static let currentLineBackgroundAlpha: CGFloat = 0.04
 
         static var font: NSFont {
-            .monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+            Text.font
         }
 
         static var horizontalChromeWidth: CGFloat {
-            markerZoneWidth + markerToNumberSpacing + numberTrailingPadding + separatorZoneWidth
+            lineNumberLeadingPadding + lineNumberTrailingPadding + foldMarkerGap + foldMarkerZoneWidth + gutterTrailingPadding + gutterSeparatorWidth
         }
     }
 
@@ -57,8 +59,7 @@ enum EditorConfiguration {
     }
 
     enum Folding {
-        static let ellipsisTrailingOffset: CGFloat = 4
-        static let ellipsisWidth: CGFloat = 12
+        static let summarySeparator = " "
     }
 
     static func preferredColumnX(textContainerOriginX: CGFloat, font: NSFont) -> CGFloat {

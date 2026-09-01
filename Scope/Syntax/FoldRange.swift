@@ -3,6 +3,13 @@ import Foundation
 struct FoldRange: Equatable, Hashable {
     let startLine: Int
     let endLine: Int
+    let closingToken: String?
+
+    init(startLine: Int, endLine: Int, closingToken: String? = nil) {
+        self.startLine = startLine
+        self.endLine = endLine
+        self.closingToken = closingToken
+    }
 
     var foldedLineCount: Int {
         endLine - startLine

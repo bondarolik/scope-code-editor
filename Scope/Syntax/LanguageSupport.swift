@@ -77,9 +77,11 @@ enum ScopeLightPalette {
     static let function = NSColor.labelColor
 
     static let gutterText = NSColor.secondaryLabelColor
+    static let gutterCurrentLineText = NSColor.labelColor
     static let gutterSeparator = NSColor.separatorColor.withAlphaComponent(0.55)
-    static let foldMarker = NSColor.tertiaryLabelColor
+    static let foldMarker = NSColor.secondaryLabelColor
     static let foldEllipsis = NSColor.secondaryLabelColor
+    static let gutterCurrentLine = NSColor.controlAccentColor.withAlphaComponent(EditorConfiguration.Gutter.currentLineBackgroundAlpha)
     static let currentLine = NSColor.controlAccentColor.withAlphaComponent(EditorConfiguration.CurrentLine.accentAlpha)
     static let preferredColumnRuler = NSColor.separatorColor.withAlphaComponent(EditorConfiguration.Ruler.separatorAlpha)
     static let statusText = NSColor.secondaryLabelColor

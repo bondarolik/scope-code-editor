@@ -71,7 +71,8 @@ struct RubySyntaxHighlighter {
         if foldableNodeTypes.contains(node.nodeType ?? ""), !node.hasError {
             let range = FoldRange(
                 startLine: Int(node.pointRange.lowerBound.row) + 1,
-                endLine: Int(node.pointRange.upperBound.row) + 1
+                endLine: Int(node.pointRange.upperBound.row) + 1,
+                closingToken: explicitClosingToken(for: node)
             )
             if range.foldedLineCount > 0 {
                 ranges.insert(range)
@@ -86,6 +87,15 @@ struct RubySyntaxHighlighter {
     private static let foldableNodeTypes: Set<String> = [
         "class", "module", "method", "singleton_method", "singleton_class", "block", "do_block"
     ]
+
+    private static func explicitClosingToken(for node: Node) -> String? {
+        switch node.nodeType {
+        case "class", "module", "method", "singleton_method", "singleton_class", "do_block":
+            return "end"
+        default:
+            return nil
+        }
+    }
 
     private static var queriesURL: URL? {
         let resourceLocations = [

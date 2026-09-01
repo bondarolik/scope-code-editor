@@ -111,6 +111,67 @@ final class ScopeTests: XCTestCase {
         XCTAssertGreaterThan(LineNumberMetrics.gutterWidth(forLineCount: 1_000, font: font), singleDigitWidth)
     }
 
+    func testLogicalLineIndexMapsVisualFragmentsToUniqueSourceLines() {
+        let source = "first\nthis is a deliberately long source line for wrapping\nnext\nlast"
+        let index = LineNumberMetrics.LogicalLineIndex(source: source)
+        let text = source as NSString
+        let longLineStart = text.range(of: "this is").location
+        let nextLineStart = text.range(of: "next").location
+
+        XCTAssertEqual(index.line(containing: 0)?.number, 1)
+        XCTAssertEqual(index.line(containing: longLineStart)?.number, 2)
+        XCTAssertEqual(index.line(containing: nextLineStart)?.number, 3)
+
+        let wrappedFragments = [
+            NSRange(location: longLineStart, length: 8),
+            NSRange(location: longLineStart + 8, length: 14),
+            NSRange(location: longLineStart + 22, length: 12),
+            NSRange(location: nextLineStart, length: 4)
+        ]
+        XCTAssertEqual(index.uniqueLines(forVisualFragmentRanges: wrappedFragments).map(\.number), [2, 3])
+        XCTAssertEqual(source, "first\nthis is a deliberately long source line for wrapping\nnext\nlast")
+    }
+
+    func testLogicalLineIndexRetainsSourceNumbersAfterFoldedContent() {
+        let source = """
+        class Example
+          def foo
+            very_long_call(with: :a, and: :b, and: :c, and: :d)
+          end
+
+          def bar
+            work
+          end
+        end
+        """
+        let index = LineNumberMetrics.LogicalLineIndex(source: source)
+        let text = source as NSString
+        let wrappedFoldStart = text.range(of: "very_long_call").location
+        let laterMethodStart = text.range(of: "def bar").location
+
+        XCTAssertEqual(index.line(containing: wrappedFoldStart)?.number, 3)
+        XCTAssertEqual(index.line(containing: laterMethodStart)?.number, 6)
+        XCTAssertEqual(
+            index.uniqueLines(forVisualFragmentRanges: [
+                NSRange(location: wrappedFoldStart, length: 10),
+                NSRange(location: wrappedFoldStart + 10, length: 10),
+                NSRange(location: laterMethodStart, length: 7)
+            ]).map(\.number),
+            [3, 6]
+        )
+        XCTAssertEqual(source, """
+        class Example
+          def foo
+            very_long_call(with: :a, and: :b, and: :c, and: :d)
+          end
+
+          def bar
+            work
+          end
+        end
+        """)
+    }
+
     func testGutterGeometryKeepsMarkerAndNumberZonesSeparateAcrossDigitTransitions() {
         let font = EditorConfiguration.Gutter.font
         let counts = [9, 10, 99, 100]
