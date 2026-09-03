@@ -1,62 +1,94 @@
 import Foundation
 import Combine
 
+struct RecentFile: Codable, Hashable, Identifiable {
+    let id: UUID
+    let bookmarkData: Data
+    let displayPath: String
+}
+
 final class RecentFileStore: ObservableObject {
-    private static let storageKey = "recentFileURLs"
+    private static let storageKey = "recentFileBookmarks"
+    private static let legacyStorageKey = "recentFileURLs"
     private static let maximumCount = 5
     private let defaults: UserDefaults
 
-    @Published private(set) var urls: [URL]
+    @Published private(set) var files: [RecentFile]
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        urls = (defaults.stringArray(forKey: Self.storageKey) ?? []).compactMap { URL(fileURLWithPath: $0) }
+        defaults.removeObject(forKey: Self.legacyStorageKey)
+        if let data = defaults.data(forKey: Self.storageKey),
+           let files = try? JSONDecoder().decode([RecentFile].self, from: data) {
+            self.files = files
+        } else {
+            self.files = []
+        }
     }
 
-    var mostRecentURL: URL? {
-        urls.first
+    var mostRecentFile: RecentFile? {
+        files.first
     }
 
-    func recordSuccessfulOpen(_ url: URL) {
-        guard url.isFileURL else { return }
-        urls.removeAll { $0.standardizedFileURL == url.standardizedFileURL }
-        urls.insert(url, at: 0)
-        if urls.count > Self.maximumCount {
-            urls.removeLast(urls.count - Self.maximumCount)
+    func recordSuccessfulOpen(_ url: URL, replacing file: RecentFile? = nil) {
+        guard let bookmarkData = try? url.bookmarkData(
+            options: .withSecurityScope,
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        ) else {
+            return
+        }
+
+        files.removeAll { $0.displayPath == url.path || $0.id == file?.id }
+        files.insert(RecentFile(id: UUID(), bookmarkData: bookmarkData, displayPath: url.path), at: 0)
+        if files.count > Self.maximumCount {
+            files.removeLast(files.count - Self.maximumCount)
         }
         persist()
     }
 
-    func remove(_ url: URL) {
-        urls.removeAll { $0.standardizedFileURL == url.standardizedFileURL }
+    func resolveURL(for file: RecentFile) throws -> URL {
+        var isStale = false
+        return try URL(
+            resolvingBookmarkData: file.bookmarkData,
+            options: .withSecurityScope,
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        )
+    }
+
+    func remove(_ file: RecentFile) {
+        files.removeAll { $0.id == file.id }
         persist()
     }
 
-    func menuTitles() -> [(url: URL, title: String)] {
+    func menuTitles() -> [(file: RecentFile, title: String)] {
         let duplicateNames = Set(
-            Dictionary(grouping: urls, by: \.lastPathComponent)
+            Dictionary(grouping: files, by: { URL(fileURLWithPath: $0.displayPath).lastPathComponent })
                 .filter { $0.value.count > 1 }
                 .map(\.key)
         )
 
-        return urls.map { url in
+        return files.map { file in
+            let url = URL(fileURLWithPath: file.displayPath)
             guard duplicateNames.contains(url.lastPathComponent) else {
-                return (url, url.lastPathComponent)
+                return (file, url.lastPathComponent)
             }
-            return (url, "\(url.lastPathComponent) — \(disambiguatingParent(for: url))")
+            return (file, "\(url.lastPathComponent) — \(disambiguatingParent(for: file))")
         }
     }
 
-    private func disambiguatingParent(for url: URL) -> String {
-        let matches = urls.filter {
-            $0.lastPathComponent == url.lastPathComponent && $0.standardizedFileURL != url.standardizedFileURL
+    private func disambiguatingParent(for file: RecentFile) -> String {
+        let url = URL(fileURLWithPath: file.displayPath)
+        let matches = files.filter {
+            URL(fileURLWithPath: $0.displayPath).lastPathComponent == url.lastPathComponent && $0.id != file.id
         }
         let components = url.deletingLastPathComponent().pathComponents
 
         for count in 1...components.count {
             let suffix = components.suffix(count).joined(separator: "/")
             let isUnique = matches.allSatisfy {
-                $0.deletingLastPathComponent().pathComponents.suffix(count).joined(separator: "/") != suffix
+                URL(fileURLWithPath: $0.displayPath).deletingLastPathComponent().pathComponents.suffix(count).joined(separator: "/") != suffix
             }
             if isUnique {
                 return suffix
@@ -67,6 +99,7 @@ final class RecentFileStore: ObservableObject {
     }
 
     private func persist() {
-        defaults.set(urls.map(\.path), forKey: Self.storageKey)
+        guard let data = try? JSONEncoder().encode(files) else { return }
+        defaults.set(data, forKey: Self.storageKey)
     }
 }

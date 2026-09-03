@@ -21,16 +21,16 @@ struct ScopeApp: App {
                 Button("Open Last Used") {
                     openLastUsed()
                 }
-                .disabled(recentFiles.mostRecentURL == nil)
+                .disabled(recentFiles.mostRecentFile == nil)
 
                 Menu("Open Recent") {
-                    ForEach(recentFiles.menuTitles(), id: \.url) { item in
+                    ForEach(recentFiles.menuTitles(), id: \.file) { item in
                         Button(item.title) {
-                            requestOpen(item.url)
+                            openRecentFile(item.file)
                         }
                     }
                 }
-                .disabled(recentFiles.urls.isEmpty)
+                .disabled(recentFiles.files.isEmpty)
 
                 Divider()
 
@@ -60,19 +60,24 @@ struct ScopeApp: App {
     }
 
     private func openLastUsed() {
-        guard let url = recentFiles.mostRecentURL else { return }
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            recentFiles.remove(url)
-            present(error: CocoaError(.fileNoSuchFile), title: "Couldn’t Open File")
-            return
-        }
-        requestOpen(url)
+        guard let file = recentFiles.mostRecentFile else { return }
+        openRecentFile(file)
     }
 
-    private func requestOpen(_ url: URL) {
+    private func openRecentFile(_ file: RecentFile) {
+        do {
+            let url = try recentFiles.resolveURL(for: file)
+            requestOpen(url, recentFile: file)
+        } catch {
+            recentFiles.remove(file)
+            present(error: error, title: "Couldn’t Open File")
+        }
+    }
+
+    private func requestOpen(_ url: URL, recentFile: RecentFile? = nil) {
         guard url.isFileURL else { return }
         guard document.isDirty else {
-            openDocument(url)
+            openDocument(url, recentFile: recentFile)
             return
         }
 
@@ -89,12 +94,12 @@ struct ScopeApp: App {
             case .alertFirstButtonReturn:
                 do {
                     try document.save()
-                    openDocument(url)
+                    openDocument(url, recentFile: recentFile)
                 } catch {
                     present(error: error, title: "Couldn’t Save File")
                 }
             case .alertSecondButtonReturn:
-                openDocument(url)
+                openDocument(url, recentFile: recentFile)
             default:
                 break
             }
@@ -107,20 +112,22 @@ struct ScopeApp: App {
         }
     }
 
-    private func openDocument(_ url: URL) {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            recentFiles.remove(url)
-            present(error: CocoaError(.fileNoSuchFile), title: "Couldn’t Open File")
-            return
-        }
-
+    private func openDocument(_ url: URL, recentFile: RecentFile?) {
         do {
             let loadedDocument = try document.prepareLoad(from: url)
             document.activate(loadedDocument)
-            recentFiles.recordSuccessfulOpen(url)
+            recentFiles.recordSuccessfulOpen(url, replacing: recentFile)
         } catch {
+            if let recentFile, isMissingFileError(error) {
+                recentFiles.remove(recentFile)
+            }
             present(error: error, title: "Couldn’t Open File")
         }
+    }
+
+    private func isMissingFileError(_ error: Error) -> Bool {
+        let cocoaError = error as NSError
+        return cocoaError.domain == NSCocoaErrorDomain && cocoaError.code == CocoaError.fileNoSuchFile.rawValue
     }
 
     private func saveFile() {
