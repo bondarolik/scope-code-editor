@@ -24,13 +24,17 @@ struct NativeTextEditor: NSViewRepresentable {
     @Binding var status: EditorStatus
     let language: LanguageID?
     let indentationWidth: Int
+    @Binding var caretSourceOffset: Int
+    @Binding var navigationTarget: Int?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             text: $text,
             status: $status,
             language: language,
-            indentationWidth: indentationWidth
+            indentationWidth: indentationWidth,
+            caretSourceOffset: $caretSourceOffset,
+            navigationTarget: $navigationTarget
         )
     }
 
@@ -53,6 +57,7 @@ struct NativeTextEditor: NSViewRepresentable {
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         context.coordinator.scheduleHighlight(for: textView)
         context.coordinator.updateStatus(from: textView)
+        context.coordinator.applyNavigationTarget(to: textView)
         textView.isEditable = true
         textView.isSelectable = true
         textView.isRichText = false
@@ -111,6 +116,8 @@ struct NativeTextEditor: NSViewRepresentable {
         private var status: Binding<EditorStatus>
         private let language: LanguageID?
         private let indentationWidth: Int
+        private var caretSourceOffset: Binding<Int>
+        private var navigationTarget: Binding<Int?>
         private var highlightRequests = HighlightRequestTracker()
         private var foldRanges = [FoldRange]()
         private var foldState = FoldState()
@@ -121,12 +128,16 @@ struct NativeTextEditor: NSViewRepresentable {
             text: Binding<String>,
             status: Binding<EditorStatus>,
             language: LanguageID?,
-            indentationWidth: Int
+            indentationWidth: Int,
+            caretSourceOffset: Binding<Int>,
+            navigationTarget: Binding<Int?>
         ) {
             self.text = text
             self.status = status
             self.language = language
             self.indentationWidth = indentationWidth
+            self.caretSourceOffset = caretSourceOffset
+            self.navigationTarget = navigationTarget
         }
 
         func textDidChange(_ notification: Notification) {
@@ -164,6 +175,15 @@ struct NativeTextEditor: NSViewRepresentable {
             updateStatus(from: textView)
             textView.needsDisplay = true
             gutter(for: textView)?.needsDisplay = true
+            if let codeTextView = textView as? CodeTextView { caretSourceOffset.wrappedValue = codeTextView.sourceLocation(forPresentationLocation: textView.selectedRange().location) }
+        }
+
+        func applyNavigationTarget(to textView: NSTextView) {
+            guard let target = navigationTarget.wrappedValue, let codeTextView = textView as? CodeTextView, let presentation = codeTextView.presentationLocation(forSourceLocation: target) else { return }
+            textView.setSelectedRange(NSRange(location: presentation, length: 0))
+            textView.scrollRangeToVisible(NSRange(location: presentation, length: 0))
+            caretSourceOffset.wrappedValue = target
+            DispatchQueue.main.async { self.navigationTarget.wrappedValue = nil }
         }
 
         func updateStatus(from textView: NSTextView) {

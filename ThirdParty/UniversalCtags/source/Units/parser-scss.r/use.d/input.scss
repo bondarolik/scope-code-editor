@@ -1,0 +1,6 @@
+@use "X/y";
+@use "Z";
+@use "A" as NS;
+@use "B/";
+@use 'C/d/e';
+@use 'P/q' as *;

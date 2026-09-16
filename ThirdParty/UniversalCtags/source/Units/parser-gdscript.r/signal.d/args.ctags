@@ -1,0 +1,4 @@
+--sort=no
+--fields=+SKiE
+--kinds-GDScript=+z
+--extras-GDScript=+{implicitClass}

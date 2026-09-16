@@ -1,0 +1,4 @@
+--sort=no
+--fields=+irKE
+--extras=+r
+--extras-GDScript=-{implicitClass}

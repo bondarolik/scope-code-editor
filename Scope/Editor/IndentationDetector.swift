@@ -25,7 +25,7 @@ enum IndentationDetector {
             : EditorConfiguration.defaultIndentationWidth
     }
 
-    private static func greatestCommonDivisor(_ lhs: Int, _ rhs: Int) -> Int {
+    nonisolated private static func greatestCommonDivisor(_ lhs: Int, _ rhs: Int) -> Int {
         var a = lhs
         var b = rhs
         while b != 0 {

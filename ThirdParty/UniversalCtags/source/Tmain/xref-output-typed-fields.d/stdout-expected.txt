@@ -1,0 +1,18 @@
+# input.ctst
+atag -> b=-,sb=,s=,i=
+btag -> b=bField,sb=,s=,i=
+ctag -> b=bField,sb=,s=,i=
+dtag -> b=-,sb=val,s=,i=
+etag -> b=-,sb=-,s=,i=
+ftag -> b=-,sb=,s=val,i=
+gtag -> b=-,sb=,s=,i=
+htag -> b=-,sb=,s=,i=23
+itag -> b=-,sb=,s=,i=-3
+jtag -> b=-,sb=,s=,i=1
+ktag -> b=-,sb=,s=,i=0
+# input.rst
+TITLE -> overline
+section -> -
+# input.c
+global -> -
+local -> file

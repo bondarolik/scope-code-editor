@@ -24,6 +24,8 @@ final class EditorDocument: ObservableObject {
     private var isAccessingSecurityScopedResource = false
 
     @Published private(set) var isDirty = false
+    @Published var caretSourceOffset = 0
+    @Published var navigationTargetSourceOffset: Int?
 
     var windowTitle: String {
         fileURL?.lastPathComponent ?? "Scope"
@@ -77,6 +79,8 @@ final class EditorDocument: ObservableObject {
         text = newText
         updateDirtyState()
     }
+
+    func updateCaretSourceOffset(_ offset: Int) { caretSourceOffset = offset }
 
     func save() throws {
         guard let fileURL else {
