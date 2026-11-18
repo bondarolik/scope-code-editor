@@ -26,6 +26,7 @@ struct NativeTextEditor: NSViewRepresentable {
     let indentationWidth: Int
     @Binding var caretSourceOffset: Int
     @Binding var navigationTarget: Int?
+    let isActive: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -52,12 +53,10 @@ struct NativeTextEditor: NSViewRepresentable {
             textContainer: textContainer,
             indentationWidth: indentationWidth
         )
-        textView.delegate = context.coordinator
         textView.applyProjection(source: text, collapsedRanges: [])
-        textView.setSelectedRange(NSRange(location: 0, length: 0))
-        context.coordinator.scheduleHighlight(for: textView)
-        context.coordinator.updateStatus(from: textView)
-        context.coordinator.applyNavigationTarget(to: textView)
+        let caret = min(max(0, caretSourceOffset), text.utf16.count)
+        textView.setSelectedRange(NSRange(location: caret, length: 0))
+        context.coordinator.attach(to: textView)
         textView.isEditable = true
         textView.isSelectable = true
         textView.isRichText = false
@@ -96,19 +95,21 @@ struct NativeTextEditor: NSViewRepresentable {
             guard let textView else { return }
             context.coordinator.toggleFold(range, in: textView)
         }
+        context.coordinator.scheduleHighlight(for: textView)
+        context.coordinator.updateStatus(from: textView)
         return EditorGutterContainerView(scrollView: scrollView, gutterView: gutterView)
     }
 
     func updateNSView(_ containerView: EditorGutterContainerView, context: Context) {
         let scrollView = containerView.scrollView
-        guard let textView = scrollView.documentView as? CodeTextView,
-              textView.canonicalSource != text else {
-            return
+        guard let textView = scrollView.documentView as? CodeTextView else { return }
+        if textView.canonicalSource != text {
+            textView.applyProjection(source: text, collapsedRanges: [])
+            containerView.gutterView.updateSourceText(text)
+            context.coordinator.updateStatus(from: textView)
+            context.coordinator.scheduleHighlight(for: textView)
         }
-        textView.applyProjection(source: text, collapsedRanges: [])
-        containerView.gutterView.updateSourceText(text)
-        context.coordinator.updateStatus(from: textView)
-        context.coordinator.scheduleHighlight(for: textView)
+        context.coordinator.updateActivation(isActive, in: textView)
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -123,6 +124,9 @@ struct NativeTextEditor: NSViewRepresentable {
         private var foldState = FoldState()
         private var highlightSpans = [HighlightSpan]()
         private var pendingSourceEdit: (range: NSRange, replacement: String)?
+        private let editorUndoManager = UndoManager()
+        private weak var textView: CodeTextView?
+        private var isActive = false
 
         init(
             text: Binding<String>,
@@ -140,14 +144,59 @@ struct NativeTextEditor: NSViewRepresentable {
             self.navigationTarget = navigationTarget
         }
 
-        func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? CodeTextView,
-                  !textView.isApplyingProjection,
-                  let pendingSourceEdit else {
-                return
+        func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
+
+        func attach(to textView: CodeTextView) {
+            self.textView = textView
+            textView.delegate = self
+            for name in [Notification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
+                NotificationCenter.default.addObserver(self, selector: #selector(didReplayUndo(_:)), name: name, object: editorUndoManager)
             }
-            self.pendingSourceEdit = nil
-            let updatedSource = (textView.canonicalSource as NSString).replacingCharacters(in: pendingSourceEdit.range, with: pendingSourceEdit.replacement)
+            for name in [Notification.Name.NSUndoManagerWillUndoChange, .NSUndoManagerWillRedoChange] {
+                NotificationCenter.default.addObserver(self, selector: #selector(willReplayUndo(_:)), name: name, object: editorUndoManager)
+            }
+        }
+
+        @objc private func willReplayUndo(_ notification: Notification) {
+            guard let textView, !textView.foldedSummaries.isEmpty else { return }
+            foldState.invalidate()
+            applyFoldPresentation(to: textView)
+        }
+
+        @objc private func didReplayUndo(_ notification: Notification) {
+            guard let textView, textView.foldedSummaries.isEmpty else { return }
+            pendingSourceEdit = nil
+            synchronizeSource(textView.string, in: textView)
+        }
+
+        func updateActivation(_ active: Bool, in textView: CodeTextView) {
+            let becameActive = active && !isActive
+            isActive = active
+            guard active, becameActive || navigationTarget.wrappedValue != nil else { return }
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, self.isActive, let textView else { return }
+                if becameActive { textView.window?.makeFirstResponder(textView) }
+                self.applyNavigationTarget(to: textView)
+            }
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? CodeTextView, !textView.isApplyingProjection else { return }
+            let edit = pendingSourceEdit
+            pendingSourceEdit = nil
+            if textView.foldedSummaries.isEmpty {
+                synchronizeSource(textView.string, in: textView)
+            } else if let edit {
+                let source = (textView.canonicalSource as NSString).replacingCharacters(in: edit.range, with: edit.replacement)
+                synchronizeSource(source, in: textView)
+                // AppKit recorded this edit in folded coordinates that no longer match the buffer.
+                // Wait for AppKit to finish its current undo group before clearing it.
+                DispatchQueue.main.async { [weak self] in self?.editorUndoManager.removeAllActions() }
+            }
+        }
+
+        private func synchronizeSource(_ updatedSource: String, in textView: CodeTextView) {
+            guard updatedSource != textView.canonicalSource else { return }
             text.wrappedValue = updatedSource
             textView.applyProjection(source: updatedSource, collapsedRanges: [])
             gutter(for: textView)?.updateSourceText(updatedSource)
@@ -155,9 +204,7 @@ struct NativeTextEditor: NSViewRepresentable {
             foldRanges = []
             highlightSpans = []
             applyFoldPresentation(to: textView)
-            gutter(for: textView)?.needsDisplay = true
-            updateStatus(from: textView)
-            textView.needsDisplay = true
+            updateSelection(from: textView)
             scheduleHighlight(for: textView)
         }
 
@@ -171,28 +218,38 @@ struct NativeTextEditor: NSViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
+            guard let textView = notification.object as? CodeTextView, !textView.isApplyingProjection else { return }
+            updateSelection(from: textView)
+        }
+
+        private func updateSelection(from textView: CodeTextView) {
             updateStatus(from: textView)
             textView.needsDisplay = true
             gutter(for: textView)?.needsDisplay = true
-            if let codeTextView = textView as? CodeTextView { caretSourceOffset.wrappedValue = codeTextView.sourceLocation(forPresentationLocation: textView.selectedRange().location) }
+            let caret = textView.sourceLocation(forPresentationLocation: textView.selectedRange().location)
+            if caretSourceOffset.wrappedValue != caret { caretSourceOffset.wrappedValue = caret }
         }
 
-        func applyNavigationTarget(to textView: NSTextView) {
-            guard let target = navigationTarget.wrappedValue, let codeTextView = textView as? CodeTextView, let presentation = codeTextView.presentationLocation(forSourceLocation: target) else { return }
+        private func applyNavigationTarget(to textView: CodeTextView) {
+            guard let target = navigationTarget.wrappedValue else { return }
+            navigationTarget.wrappedValue = nil
+            guard let presentation = textView.presentationLocation(forSourceLocation: target) else { return }
             textView.setSelectedRange(NSRange(location: presentation, length: 0))
             textView.scrollRangeToVisible(NSRange(location: presentation, length: 0))
-            caretSourceOffset.wrappedValue = target
-            DispatchQueue.main.async { self.navigationTarget.wrappedValue = nil }
+            if caretSourceOffset.wrappedValue != target { caretSourceOffset.wrappedValue = target }
         }
 
         func updateStatus(from textView: NSTextView) {
             let sourceLocation = (textView as? CodeTextView)?.sourceLocation(forPresentationLocation: textView.selectedRange().location) ?? textView.selectedRange().location
-            status.wrappedValue = EditorStatus(
+            let newStatus = EditorStatus(
                 position: EditorPosition.at(utf16Offset: sourceLocation, in: (textView as? CodeTextView)?.canonicalSource ?? textView.string),
                 languageName: language?.displayName ?? "Plain Text",
                 indentationWidth: indentationWidth
             )
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.status.wrappedValue != newStatus else { return }
+                self.status.wrappedValue = newStatus
+            }
         }
 
         func scheduleHighlight(for textView: NSTextView) {
@@ -292,12 +349,18 @@ final class CodeTextView: NSTextView {
     }
 
     func applyProjection(source: String, collapsedRanges: Set<FoldRange>) {
-        let selectedSourceLocation = projection.sourceLocation(forPresentationLocation: selectedRange().location)
+        let selection = selectedRange()
+        let sourceStart = projection.sourceLocation(forPresentationLocation: selection.location)
+        let sourceEnd = projection.sourceLocation(forPresentationLocation: NSMaxRange(selection))
         projection = FoldedTextProjection(source: source, collapsedRanges: collapsedRanges)
-        let presentationLocation = projection.presentationLocation(forSourceLocation: selectedSourceLocation) ?? 0
         isApplyingProjection = true
         undoManager?.disableUndoRegistration()
-        string = projection.presentation
+        if string != projection.presentation {
+            string = projection.presentation
+            let start = projection.presentationLocation(forSourceLocation: sourceStart) ?? 0
+            let end = projection.presentationLocation(forSourceLocation: sourceEnd) ?? start
+            setSelectedRange(NSRange(location: start, length: max(0, end - start)))
+        }
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.minimumLineHeight = EditorConfiguration.Text.lineHeight
         paragraphStyle.maximumLineHeight = EditorConfiguration.Text.lineHeight
@@ -307,7 +370,6 @@ final class CodeTextView: NSTextView {
             range: NSRange(location: 0, length: (projection.presentation as NSString).length)
         )
         undoManager?.enableUndoRegistration()
-        setSelectedRange(NSRange(location: presentationLocation, length: 0))
         isApplyingProjection = false
         needsDisplay = true
         (enclosingScrollView?.superview as? EditorGutterContainerView)?.gutterView.needsDisplay = true

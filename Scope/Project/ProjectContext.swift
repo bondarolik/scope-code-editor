@@ -1,96 +1,173 @@
 import Foundation
 import Combine
 
-struct ProjectFileEntry: Identifiable, Hashable, Sendable {
+nonisolated struct ProjectFileEntry: Identifiable, Hashable, Sendable {
     let url: URL
     let relativePath: String
     var id: URL { url }
     var filename: String { url.lastPathComponent }
 }
 
-enum ProjectIgnorePolicy {
+nonisolated enum ProjectIgnorePolicy {
     static let directoryPaths: Set<String> = [".git", "node_modules", "vendor/bundle", "tmp", "log", ".bundle", "coverage", "storage", "public/assets", "public/packs"]
+
     static func ignores(_ url: URL, relativePath: String, isDirectory: Bool) -> Bool {
-        let name = url.lastPathComponent
-        return name == ".DS_Store" || (isDirectory && directoryPaths.contains(relativePath))
+        url.lastPathComponent == ".DS_Store" || (isDirectory && directoryPaths.contains(relativePath))
     }
 }
 
-struct ProjectFileIndex: Sendable {
+nonisolated struct ProjectFileIndex: Sendable {
     let entries: [ProjectFileEntry]
     static let empty = ProjectFileIndex(entries: [])
 }
 
-struct ProjectTreeNode: Identifiable, Hashable {
+nonisolated struct ProjectTreeNode: Identifiable, Hashable, Sendable {
     let url: URL
     let name: String
     let isDirectory: Bool
-    let children: [ProjectTreeNode]?
+    let children: [ProjectTreeNode]
     var id: URL { url }
 }
 
-enum ProjectTreeBuilder {
-    private final class MutableNode {
-        let url: URL; let name: String; let isDirectory: Bool
-        var children = [String: MutableNode]()
-        init(url: URL, name: String, isDirectory: Bool) { self.url = url; self.name = name; self.isDirectory = isDirectory }
-        func frozen() -> ProjectTreeNode {
-            let nodes = children.values.sorted { $0.isDirectory == $1.isDirectory ? $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending : $0.isDirectory }.map { $0.frozen() }
-            return ProjectTreeNode(url: url, name: name, isDirectory: isDirectory, children: isDirectory ? nodes : nil)
+nonisolated struct ProjectScan: Sendable {
+    let fileIndex: ProjectFileIndex
+    let treeRoots: [ProjectTreeNode]
+}
+
+nonisolated enum ProjectFileIndexer {
+    private final class Node {
+        let url: URL
+        let isDirectory: Bool
+        var children: [Node] = []
+
+        init(url: URL, isDirectory: Bool) {
+            self.url = url
+            self.isDirectory = isDirectory
         }
-    }
-    static func roots(from index: ProjectFileIndex, rootURL: URL) -> [ProjectTreeNode] {
-        let root = MutableNode(url: rootURL, name: rootURL.lastPathComponent, isDirectory: true)
-        for entry in index.entries {
-            var parent = root
-            for (offset, component) in entry.relativePath.split(separator: "/").map(String.init).enumerated() {
-                let isFile = offset == entry.relativePath.split(separator: "/").count - 1
-                if let existing = parent.children[component] { parent = existing } else {
-                    let child = MutableNode(url: parent.url.appendingPathComponent(component), name: component, isDirectory: !isFile)
-                    parent.children[component] = child; parent = child
-                }
+
+        func sortedChildren() -> [ProjectTreeNode] {
+            children.sorted { first, second in
+                if first.isDirectory != second.isDirectory { return first.isDirectory }
+                return first.url.lastPathComponent.localizedStandardCompare(second.url.lastPathComponent) == .orderedAscending
+            }.map { child in
+                ProjectTreeNode(url: child.url, name: child.url.lastPathComponent, isDirectory: child.isDirectory, children: child.sortedChildren())
             }
         }
-        return root.children.values.sorted { $0.isDirectory == $1.isDirectory ? $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending : $0.isDirectory }.map { $0.frozen() }
+    }
+
+    static func scan(rootURL: URL) throws -> ProjectScan {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey]
+        var enumerationError: Error?
+        guard let enumerator = FileManager.default.enumerator(
+            at: rootURL,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsPackageDescendants],
+            errorHandler: { _, error in
+                enumerationError = error
+                return false
+            }
+        ) else {
+            throw CocoaError(.fileReadUnknown, userInfo: [NSURLErrorKey: rootURL])
+        }
+
+        let root = Node(url: rootURL, isDirectory: true)
+        let rootDepth = rootURL.standardizedFileURL.pathComponents.count
+        var directories = [rootURL.standardizedFileURL.path: root]
+        var files: [ProjectFileEntry] = []
+        for case let url as URL in enumerator {
+            try Task.checkCancellation()
+            let path = url.standardizedFileURL
+            let relativePath = path.pathComponents.dropFirst(rootDepth).joined(separator: "/")
+            let values = try url.resourceValues(forKeys: keys)
+            let isDirectory = values.isDirectory == true
+            if ProjectIgnorePolicy.ignores(url, relativePath: relativePath, isDirectory: isDirectory) {
+                if isDirectory { enumerator.skipDescendants() }
+                continue
+            }
+            guard isDirectory || values.isRegularFile == true else { continue }
+
+            let node = Node(url: url, isDirectory: isDirectory)
+            directories[path.deletingLastPathComponent().path]?.children.append(node)
+            if isDirectory {
+                directories[path.path] = node
+            } else {
+                files.append(ProjectFileEntry(url: url, relativePath: relativePath))
+            }
+        }
+        if let enumerationError { throw enumerationError }
+        try Task.checkCancellation()
+        let sortedFiles = files.sorted { $0.relativePath.localizedCaseInsensitiveCompare($1.relativePath) == .orderedAscending }
+        return ProjectScan(fileIndex: ProjectFileIndex(entries: sortedFiles), treeRoots: root.sortedChildren())
     }
 }
 
-enum ProjectFileIndexer {
-    static func build(rootURL: URL) -> ProjectFileIndex {
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey]
-        guard let enumerator = FileManager.default.enumerator(at: rootURL, includingPropertiesForKeys: Array(keys), options: [.skipsPackageDescendants]) else { return .empty }
-        var entries = [ProjectFileEntry]()
-        for case let url as URL in enumerator {
-            let relative = url.path.replacingOccurrences(of: rootURL.path + "/", with: "")
-            let values = try? url.resourceValues(forKeys: keys)
-            let directory = values?.isDirectory == true
-            if ProjectIgnorePolicy.ignores(url, relativePath: relative, isDirectory: directory) {
-                if directory { enumerator.skipDescendants() }
-                continue
-            }
-            if values?.isRegularFile == true { entries.append(.init(url: url, relativePath: relative)) }
-        }
-        return ProjectFileIndex(entries: entries.sorted { $0.relativePath.localizedCaseInsensitiveCompare($1.relativePath) == .orderedAscending })
+nonisolated final class ProjectFolderAccess: Sendable {
+    let url: URL
+    private let accessing: Bool
+
+    init(url: URL) {
+        self.url = url
+        accessing = url.startAccessingSecurityScopedResource()
+    }
+
+    deinit {
+        if accessing { url.stopAccessingSecurityScopedResource() }
     }
 }
 
 @MainActor final class ProjectContext: ObservableObject {
-    let rootURL: URL
-    private let accessesSecurityScope: Bool
-    @Published private(set) var fileIndex = ProjectFileIndex.empty
-    @Published private(set) var treeRoots = [ProjectTreeNode]()
-    @Published var expandedDirectories = Set<URL>()
-    init(rootURL: URL) { self.rootURL = rootURL; accessesSecurityScope = rootURL.startAccessingSecurityScopedResource() }
-    deinit { if accessesSecurityScope { rootURL.stopAccessingSecurityScopedResource() } }
-    func buildFileIndex() {
-        let root = rootURL
-        Task.detached(priority: .userInitiated) {
-            let index = ProjectFileIndexer.build(rootURL: root)
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.fileIndex = index
-                self.treeRoots = ProjectTreeBuilder.roots(from: index, rootURL: self.rootURL)
+    enum State {
+        case scanning
+        case loaded(ProjectScan)
+        case failed(String)
+    }
+
+    let folderAccess: ProjectFolderAccess
+    var rootURL: URL { folderAccess.url }
+    @Published private(set) var state: State = .scanning
+    @Published private(set) var expandedDirectories: Set<URL> = []
+    private var scanID: UUID?
+    private var scanTask: Task<ProjectScan, Error>?
+
+    var fileIndex: ProjectFileIndex {
+        guard case let .loaded(result) = state else { return .empty }
+        return result.fileIndex
+    }
+
+    init(rootURL: URL) {
+        folderAccess = ProjectFolderAccess(url: rootURL)
+    }
+
+    @discardableResult
+    func buildFileIndex(
+        scan: @escaping @Sendable (URL) throws -> ProjectScan = { try ProjectFileIndexer.scan(rootURL: $0) }
+    ) -> Task<Void, Never> {
+        cancelScan()
+        state = .scanning
+        let id = UUID()
+        scanID = id
+        let task = Task.detached(priority: .userInitiated) { [folderAccess] in
+            try withExtendedLifetime(folderAccess) { try scan(folderAccess.url) }
+        }
+        scanTask = task
+        return Task { [weak self] in
+            let result = await task.result
+            guard let self, self.scanID == id else { return }
+            self.scanTask = nil
+            switch result {
+            case .success(let scan): self.state = .loaded(scan)
+            case .failure(let error): self.state = .failed(error.localizedDescription)
             }
         }
+    }
+
+    func cancelScan() {
+        scanID = nil
+        scanTask?.cancel()
+        scanTask = nil
+    }
+
+    func toggleDirectory(_ url: URL) {
+        if expandedDirectories.remove(url) == nil { expandedDirectories.insert(url) }
     }
 }

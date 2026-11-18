@@ -107,6 +107,7 @@ struct FoldedTextProjection {
     }
 
     func editableSourceRange(forPresentationRange range: NSRange) -> NSRange? {
+        if source.isEmpty, range == NSRange(location: 0, length: 0) { return range }
         guard !summaries.contains(where: {
             range.location >= $0.presentationRange.location && range.location <= $0.presentationRange.upperBound
         }) else {

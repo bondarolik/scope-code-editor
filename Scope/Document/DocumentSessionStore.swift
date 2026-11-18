@@ -1,14 +1,40 @@
 import Foundation
 
-struct RestorableDocument: Codable, Hashable, Identifiable {
+nonisolated struct RestorableDocument: Codable, Hashable, Identifiable {
     let id: UUID
     let bookmarkData: Data
     let displayPath: String
 }
 
-struct RestorableDocumentSession: Codable, Equatable {
+nonisolated struct RestorableDocumentSession: Codable, Equatable {
     var documents: [RestorableDocument]
     var activeDocumentID: UUID?
+    var project: RestorableProject? = nil
+}
+
+nonisolated struct RestorableProject: Codable, Equatable {
+    let bookmarkData: Data
+}
+
+struct WorkspaceBookmarks {
+    var make: (URL) throws -> Data
+    var resolve: (Data) throws -> (url: URL, isStale: Bool)
+
+    static let securityScoped = WorkspaceBookmarks(
+        make: { url in
+            try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+        },
+        resolve: { data in
+            var isStale = false
+            let url = try URL(
+                resolvingBookmarkData: data,
+                options: [.withSecurityScope, .withoutUI],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale
+            )
+            return (url, isStale)
+        }
+    )
 }
 
 final class DocumentSessionStore {
@@ -34,17 +60,5 @@ final class DocumentSessionStore {
 
     func clear() {
         defaults.removeObject(forKey: Self.storageKey)
-    }
-
-    static func document(for url: URL) -> RestorableDocument? {
-        guard let bookmarkData = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) else {
-            return nil
-        }
-        return RestorableDocument(id: UUID(), bookmarkData: bookmarkData, displayPath: url.path)
-    }
-
-    static func resolveURL(for document: RestorableDocument) throws -> URL {
-        var isStale = false
-        return try URL(resolvingBookmarkData: document.bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
     }
 }
