@@ -37,7 +37,7 @@ final class EditorDocument: ObservableObject, Identifiable {
     }
 
     private func updateDirtyState() {
-        isDirty = text != savedText
+        isDirty = !text.utf16.elementsEqual(savedText.utf16)
     }
 
     struct LoadedDocument {

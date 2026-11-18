@@ -241,8 +241,10 @@ final class WorkspaceTests: XCTestCase {
         let window = NSWindow(contentRect: firstView.frame, styleMask: .titled, backing: .buffered, defer: false)
         window.contentView?.addSubview(firstView)
         window.contentView?.addSubview(secondView)
-        let firstUndo = try XCTUnwrap(firstCoordinator.undoManager(for: firstView))
-        let secondUndo = try XCTUnwrap(secondCoordinator.undoManager(for: secondView))
+        defer { withExtendedLifetime(firstCoordinator) {} }
+        let firstUndo = try XCTUnwrap(firstView.sourceUndoManager)
+        defer { withExtendedLifetime(secondCoordinator) {} }
+        let secondUndo = try XCTUnwrap(secondView.sourceUndoManager)
         firstUndo.groupsByEvent = false
         secondUndo.groupsByEvent = false
         XCTAssertTrue(window.makeFirstResponder(firstView))
@@ -261,47 +263,214 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(first.text, "first!")
         XCTAssertEqual(second.text, "second?")
         XCTAssertTrue(window.makeFirstResponder(firstView))
-        XCTAssertTrue(firstUndo.canUndo)
-        firstUndo.undo()
+        let undoItem = NSMenuItem(title: "Undo", action: #selector(CodeTextView.undoSourceEdit(_:)), keyEquivalent: "z")
+        let redoItem = NSMenuItem(title: "Redo", action: #selector(CodeTextView.redoSourceEdit(_:)), keyEquivalent: "Z")
+        XCTAssertTrue(firstView.validateMenuItem(undoItem))
+        XCTAssertFalse(firstView.validateMenuItem(redoItem))
+        XCTAssertTrue(window.firstResponder?.tryToPerform(#selector(CodeTextView.undoSourceEdit(_:)), with: nil) == true)
         XCTAssertEqual(firstView.string, "first")
         XCTAssertEqual(first.text, "first")
         XCTAssertEqual(second.text, "second?")
-        firstUndo.redo()
+        XCTAssertTrue(firstView.validateMenuItem(redoItem))
+        XCTAssertTrue(window.firstResponder?.tryToPerform(#selector(CodeTextView.redoSourceEdit(_:)), with: nil) == true)
         XCTAssertEqual(first.text, "first!")
     }
 
-    func testEditingFoldedTextKeepsSourceAndClearsUndoAfterEditGroup() async throws {
-        let source = "def hello\n  puts :hello\nend\nafter"
+    func testUndoAndRedoAcrossEditsAndFoldChanges() throws {
+        let source = "def hello\n  puts :hidden\nend\nafter"
+        let fold = FoldRange(startLine: 1, endLine: 3, closingToken: "end")
         let (view, document, coordinator) = makeEditor(source)
         let window = NSWindow(contentRect: view.frame, styleMask: .titled, backing: .buffered, defer: false)
         window.contentView?.addSubview(view)
         XCTAssertTrue(window.makeFirstResponder(view))
-        view.applyProjection(source: source, collapsedRanges: [FoldRange(startLine: 1, endLine: 3, closingToken: "end")])
-        XCTAssertFalse(view.foldedSummaries.isEmpty)
-        let undo = try XCTUnwrap(coordinator.undoManager(for: view))
+        defer { withExtendedLifetime(coordinator) {} }
+        let undo = try XCTUnwrap(view.sourceUndoManager)
         undo.groupsByEvent = false
-        undo.beginUndoGrouping()
-        let insertion = NSRange(location: view.string.utf16.count, length: 0)
-        view.setSelectedRange(insertion)
-        view.insertText("!", replacementRange: insertion)
-        undo.endUndoGrouping()
+
+        edit(view, with: "!", at: NSRange(location: source.utf16.count, length: 0), undo: undo)
+        view.applyProjection(source: document.text, collapsedRanges: [fold])
+        let summary = try XCTUnwrap(view.foldedSummaries.first)
+        let before = NSRange(location: summary.presentationRange.location - 5, length: 5)
+        edit(view, with: "goodbye", at: before, undo: undo)
+        XCTAssertEqual(document.text, "def goodbye\n  puts :hidden\nend\nafter!")
+
+        view.applyProjection(source: document.text, collapsedRanges: [fold])
+        let after = try XCTUnwrap(view.foldedSummaries.first).presentationRange.upperBound
+        edit(view, with: "", at: NSRange(location: after, length: 1), undo: undo)
+        XCTAssertEqual(document.text, "def goodbye\n  puts :hidden\nend\nfter!")
+        view.applyProjection(source: document.text, collapsedRanges: [fold])
+
+        undo.undo()
+        XCTAssertEqual(document.text, "def goodbye\n  puts :hidden\nend\nafter!")
+        XCTAssertEqual((view.string as NSString).substring(with: view.selectedRange()), "a")
+        undo.undo()
+        XCTAssertEqual(document.text, source + "!")
+        XCTAssertEqual((view.string as NSString).substring(with: view.selectedRange()), "hello")
+        undo.undo()
+        XCTAssertEqual(document.text, source)
+        XCTAssertFalse(undo.canUndo)
+
+        view.applyProjection(source: document.text, collapsedRanges: [fold])
+        view.applyProjection(source: document.text, collapsedRanges: [])
+        undo.redo()
+        XCTAssertEqual(document.text, source + "!")
+        view.applyProjection(source: document.text, collapsedRanges: [fold])
+        undo.redo()
+        XCTAssertEqual(document.text, "def goodbye\n  puts :hidden\nend\nafter!")
+        undo.redo()
+        XCTAssertEqual(document.text, "def goodbye\n  puts :hidden\nend\nfter!")
+        XCTAssertEqual(view.string, document.text)
+        XCTAssertEqual(view.selectedRange(), NSRange(location: document.text.utf16.count - "fter!".utf16.count, length: 0))
+        XCTAssertEqual(document.caretSourceOffset, view.selectedRange().location)
+        XCTAssertFalse(undo.canRedo)
+    }
+
+    func testEditAcrossFoldSummaryCannotRemoveHiddenSourceOrHistory() throws {
+        let source = "def hello\n  puts :hidden\nend\nafter"
+        let (view, document, coordinator) = makeEditor(source)
+        defer { withExtendedLifetime(coordinator) {} }
+        let undo = try XCTUnwrap(view.sourceUndoManager)
+        undo.groupsByEvent = false
+        edit(view, with: "!", at: NSRange(location: source.utf16.count, length: 0), undo: undo)
+        view.applyProjection(source: document.text, collapsedRanges: [FoldRange(startLine: 1, endLine: 3, closingToken: "end")])
+        let summary = try XCTUnwrap(view.foldedSummaries.first)
+        view.setSelectedRange(summary.presentationRange)
+        view.insertText("replacement", replacementRange: summary.presentationRange)
 
         XCTAssertEqual(document.text, source + "!")
-        await withCheckedContinuation { continuation in
-            DispatchQueue.main.async { continuation.resume() }
-        }
+        XCTAssertFalse(view.foldedSummaries.isEmpty)
+        undo.undo()
+        XCTAssertEqual(document.text, source)
         XCTAssertFalse(undo.canUndo)
     }
 
-    private func makeEditor(_ source: String) -> (CodeTextView, EditorDocument, NativeTextEditor.Coordinator) {
+    func testUndoAndRedoPreserveUTF16AndDirtyStateAcrossFolding() throws {
+        let root = try temporaryFolder()
+        let url = try file("unicode.rb", in: root)
+        let source = "def hello\n  puts \"🔒\"\nend\n🧑🏽‍💻 café"
+        try source.write(to: url, atomically: true, encoding: .utf8)
         let document = EditorDocument()
+        try document.load(from: url)
+        let (view, _, coordinator) = makeEditor(source, document: document)
+        defer { withExtendedLifetime(coordinator) {} }
+        let undo = try XCTUnwrap(view.sourceUndoManager)
+        undo.groupsByEvent = false
+        let fold = FoldRange(startLine: 1, endLine: 3, closingToken: "end")
+        view.applyProjection(source: source, collapsedRanges: [fold])
+
+        let range = (view.string as NSString).range(of: "café")
+        edit(view, with: "cafe\u{301} 👋", at: range, undo: undo)
+        let updated = "def hello\n  puts \"🔒\"\nend\n🧑🏽‍💻 cafe\u{301} 👋"
+        XCTAssertEqual(Array(document.text.utf16), Array(updated.utf16))
+        XCTAssertTrue(document.isDirty)
+        XCTAssertEqual(view.selectedRange().location, updated.utf16.count)
+
+        view.applyProjection(source: document.text, collapsedRanges: [fold])
+        undo.undo()
+        XCTAssertEqual(Array(document.text.utf16), Array(source.utf16))
+        XCTAssertFalse(document.isDirty)
+        XCTAssertEqual(view.selectedRange(), (source as NSString).range(of: "café"))
+
+        undo.redo()
+        XCTAssertEqual(Array(document.text.utf16), Array(updated.utf16))
+        XCTAssertTrue(document.isDirty)
+        XCTAssertEqual(document.caretSourceOffset, updated.utf16.count)
+
+        try document.save()
+        undo.undo()
+        XCTAssertTrue(document.isDirty)
+        undo.redo()
+        XCTAssertFalse(document.isDirty)
+    }
+
+    func testCanonicallyEquivalentReplacementIsUndoable() throws {
+        let source = "café"
+        let url = try file("normalization.txt", in: temporaryFolder())
+        try source.write(to: url, atomically: true, encoding: .utf8)
+        let document = EditorDocument()
+        try document.load(from: url)
+        let (view, _, coordinator) = makeEditor(source, document: document)
+        defer { withExtendedLifetime(coordinator) {} }
+        let undo = try XCTUnwrap(view.sourceUndoManager)
+        undo.groupsByEvent = false
+        edit(view, with: "e\u{301}", at: NSRange(location: 3, length: 1), undo: undo)
+
+        XCTAssertEqual(Array(document.text.utf16), Array("cafe\u{301}".utf16))
+        XCTAssertEqual(Array(view.string.utf16), Array(document.text.utf16))
+        XCTAssertTrue(document.isDirty)
+        undo.undo()
+        XCTAssertEqual(Array(document.text.utf16), Array(source.utf16))
+        XCTAssertFalse(document.isDirty)
+        undo.redo()
+        XCTAssertEqual(Array(document.text.utf16), Array("cafe\u{301}".utf16))
+    }
+
+    func testMultiRangeReplacementAcrossFoldUndoesAsOneEdit() throws {
+        let source = "def hello\n  puts :hidden\nend\nafter"
+        let (view, document, coordinator) = makeEditor(source)
+        defer { withExtendedLifetime(coordinator) {} }
+        let undo = try XCTUnwrap(view.sourceUndoManager)
+        undo.groupsByEvent = false
+        view.applyProjection(source: source, collapsedRanges: [FoldRange(startLine: 1, endLine: 3, closingToken: "end")])
+        let presented = view.string as NSString
+        let ranges = [presented.range(of: "hello"), presented.range(of: "after")]
+        let replacements = ["greeting", ""]
+        undo.beginUndoGrouping()
+        XCTAssertTrue(view.shouldChangeText(inRanges: ranges.map { NSValue(range: $0) }, replacementStrings: replacements))
+        for (range, replacement) in zip(ranges, replacements).reversed() {
+            view.textStorage?.replaceCharacters(in: range, with: replacement)
+        }
+        view.didChangeText()
+        undo.endUndoGrouping()
+
+        XCTAssertEqual(document.text, "def greeting\n  puts :hidden\nend\n")
+        undo.undo()
+        XCTAssertEqual(document.text, source)
+        XCTAssertFalse(undo.canUndo)
+        undo.redo()
+        XCTAssertEqual(document.text, "def greeting\n  puts :hidden\nend\n")
+    }
+
+    func testMarkedTextCommitsAsOneCanonicalEditAfterFold() throws {
+        let source = "def hello\n  puts :hidden\nend\nafter"
+        let (view, document, coordinator) = makeEditor(source)
+        defer { withExtendedLifetime(coordinator) {} }
+        let undo = try XCTUnwrap(view.sourceUndoManager)
+        undo.groupsByEvent = false
+        view.applyProjection(source: source, collapsedRanges: [FoldRange(startLine: 1, endLine: 3, closingToken: "end")])
+        let insertion = NSRange(location: view.string.utf16.count, length: 0)
+        view.setSelectedRange(insertion)
+        undo.beginUndoGrouping()
+        view.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: insertion)
+        XCTAssertEqual(document.text, source)
+        XCTAssertTrue(view.hasMarkedText())
+        view.insertText("你", replacementRange: view.markedRange())
+        undo.endUndoGrouping()
+
+        XCTAssertEqual(document.text, source + "你")
+        XCTAssertFalse(view.hasMarkedText())
+        undo.undo()
+        XCTAssertEqual(document.text, source)
+        undo.redo()
+        XCTAssertEqual(document.text, source + "你")
+    }
+
+    private func edit(_ view: CodeTextView, with replacement: String, at range: NSRange, undo: UndoManager) {
+        undo.beginUndoGrouping()
+        view.setSelectedRange(range)
+        view.insertText(replacement, replacementRange: range)
+        undo.endUndoGrouping()
+    }
+
+    private func makeEditor(_ source: String, document existingDocument: EditorDocument? = nil) -> (CodeTextView, EditorDocument, NativeTextEditor.Coordinator) {
+        let document = existingDocument ?? EditorDocument()
         document.updateText(source)
         let coordinator = NativeTextEditor.Coordinator(
             text: Binding(get: { document.text }, set: document.updateText),
             status: .constant(EditorStatus()),
             language: nil,
             indentationWidth: 2,
-            caretSourceOffset: .constant(0),
+            caretSourceOffset: Binding(get: { document.caretSourceOffset }, set: document.updateCaretSourceOffset),
             navigationTarget: .constant(nil)
         )
         let view = makeTextView()
@@ -310,7 +479,6 @@ final class WorkspaceTests: XCTestCase {
         view.isRichText = false
         view.isEditable = true
         view.isSelectable = true
-        view.allowsUndo = true
         return (view, document, coordinator)
     }
 
