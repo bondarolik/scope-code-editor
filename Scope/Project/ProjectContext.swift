@@ -79,6 +79,7 @@ enum ProjectFileIndexer {
     private let accessesSecurityScope: Bool
     @Published private(set) var fileIndex = ProjectFileIndex.empty
     @Published private(set) var treeRoots = [ProjectTreeNode]()
+    @Published var expandedDirectories = Set<URL>()
     init(rootURL: URL) { self.rootURL = rootURL; accessesSecurityScope = rootURL.startAccessingSecurityScopedResource() }
     deinit { if accessesSecurityScope { rootURL.stopAccessingSecurityScopedResource() } }
     func buildFileIndex() {

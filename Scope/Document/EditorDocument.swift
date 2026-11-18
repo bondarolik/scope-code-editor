@@ -15,7 +15,8 @@ enum EditorDocumentError: LocalizedError, Equatable {
     }
 }
 
-final class EditorDocument: ObservableObject {
+final class EditorDocument: ObservableObject, Identifiable {
+    let id: UUID
     @Published private(set) var fileURL: URL?
     @Published private(set) var text = ""
     @Published private(set) var indentationWidth = EditorConfiguration.defaultIndentationWidth
@@ -26,6 +27,10 @@ final class EditorDocument: ObservableObject {
     @Published private(set) var isDirty = false
     @Published var caretSourceOffset = 0
     @Published var navigationTargetSourceOffset: Int?
+
+    init(id: UUID = UUID()) {
+        self.id = id
+    }
 
     var windowTitle: String {
         fileURL?.lastPathComponent ?? "Scope"
@@ -73,6 +78,10 @@ final class EditorDocument: ObservableObject {
         isDirty = false
         isAccessingSecurityScopedResource = loadedDocument.isAccessingSecurityScopedResource
         presentationGeneration += 1
+    }
+
+    func load(from url: URL) throws {
+        activate(try prepareLoad(from: url))
     }
 
     func updateText(_ newText: String) {

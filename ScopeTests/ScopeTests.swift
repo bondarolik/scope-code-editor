@@ -25,7 +25,7 @@ final class ScopeTests: XCTestCase {
 
         XCTAssertEqual(
             highlighter.foldRanges(in: "def example\n  foo\nend"),
-            [FoldRange(startLine: 1, endLine: 3)]
+            [FoldRange(startLine: 1, endLine: 3, closingToken: "end")]
         )
         XCTAssertEqual(
             highlighter.foldRanges(in: "def foo; true; end"),
@@ -44,9 +44,9 @@ final class ScopeTests: XCTestCase {
         XCTAssertEqual(
             Set(nested),
             Set([
-                FoldRange(startLine: 1, endLine: 7),
-                FoldRange(startLine: 2, endLine: 6),
-                FoldRange(startLine: 3, endLine: 5)
+                FoldRange(startLine: 1, endLine: 7, closingToken: "end"),
+                FoldRange(startLine: 2, endLine: 6, closingToken: "end"),
+                FoldRange(startLine: 3, endLine: 5, closingToken: "end")
             ])
         )
         XCTAssertTrue(highlighter.foldRanges(in: "def foo\n  something").isEmpty)
@@ -101,19 +101,19 @@ final class ScopeTests: XCTestCase {
         XCTAssertEqual(EditorPosition.at(utf16Offset: 2, in: "a😀b"), EditorPosition(line: 1, column: 2))
     }
 
-    func testLineNumberMetrics() {
-        XCTAssertEqual(LineNumberMetrics.lineCount(in: ""), 1)
-        XCTAssertEqual(LineNumberMetrics.lineCount(in: "one\ntwo\nthree"), 3)
+    func testEditorGutterMetricsTracksLogicalLinesAndWidth() {
+        XCTAssertEqual(EditorGutterMetrics.LogicalLineIndex(source: "").lineCount, 1)
+        XCTAssertEqual(EditorGutterMetrics.LogicalLineIndex(source: "one\ntwo\nthree").lineCount, 3)
         let font = EditorConfiguration.Gutter.font
-        let singleDigitWidth = LineNumberMetrics.gutterWidth(forLineCount: 9, font: font)
-        XCTAssertEqual(singleDigitWidth, LineNumberMetrics.gutterWidth(forLineCount: 1, font: font))
-        XCTAssertGreaterThan(LineNumberMetrics.gutterWidth(forLineCount: 10, font: font), singleDigitWidth)
-        XCTAssertGreaterThan(LineNumberMetrics.gutterWidth(forLineCount: 1_000, font: font), singleDigitWidth)
+        let minimumWidth = EditorGutterMetrics.gutterGeometry(forLineCount: 9, font: font).width
+        XCTAssertEqual(minimumWidth, EditorGutterMetrics.gutterGeometry(forLineCount: 1, font: font).width)
+        XCTAssertEqual(minimumWidth, EditorGutterMetrics.gutterGeometry(forLineCount: 1_000, font: font).width)
+        XCTAssertGreaterThan(EditorGutterMetrics.gutterGeometry(forLineCount: 10_000, font: font).width, minimumWidth)
     }
 
     func testLogicalLineIndexMapsVisualFragmentsToUniqueSourceLines() {
         let source = "first\nthis is a deliberately long source line for wrapping\nnext\nlast"
-        let index = LineNumberMetrics.LogicalLineIndex(source: source)
+        let index = EditorGutterMetrics.LogicalLineIndex(source: source)
         let text = source as NSString
         let longLineStart = text.range(of: "this is").location
         let nextLineStart = text.range(of: "next").location
@@ -122,13 +122,7 @@ final class ScopeTests: XCTestCase {
         XCTAssertEqual(index.line(containing: longLineStart)?.number, 2)
         XCTAssertEqual(index.line(containing: nextLineStart)?.number, 3)
 
-        let wrappedFragments = [
-            NSRange(location: longLineStart, length: 8),
-            NSRange(location: longLineStart + 8, length: 14),
-            NSRange(location: longLineStart + 22, length: 12),
-            NSRange(location: nextLineStart, length: 4)
-        ]
-        XCTAssertEqual(index.uniqueLines(forVisualFragmentRanges: wrappedFragments).map(\.number), [2, 3])
+        XCTAssertEqual(index.visibleLines(intersecting: NSRange(location: longLineStart, length: nextLineStart - longLineStart), overscan: 0).map(\.number), [2])
         XCTAssertEqual(source, "first\nthis is a deliberately long source line for wrapping\nnext\nlast")
     }
 
@@ -144,21 +138,14 @@ final class ScopeTests: XCTestCase {
           end
         end
         """
-        let index = LineNumberMetrics.LogicalLineIndex(source: source)
+        let index = EditorGutterMetrics.LogicalLineIndex(source: source)
         let text = source as NSString
         let wrappedFoldStart = text.range(of: "very_long_call").location
         let laterMethodStart = text.range(of: "def bar").location
 
         XCTAssertEqual(index.line(containing: wrappedFoldStart)?.number, 3)
         XCTAssertEqual(index.line(containing: laterMethodStart)?.number, 6)
-        XCTAssertEqual(
-            index.uniqueLines(forVisualFragmentRanges: [
-                NSRange(location: wrappedFoldStart, length: 10),
-                NSRange(location: wrappedFoldStart + 10, length: 10),
-                NSRange(location: laterMethodStart, length: 7)
-            ]).map(\.number),
-            [3, 6]
-        )
+        XCTAssertEqual(index.visibleLines(intersecting: NSRange(location: wrappedFoldStart, length: laterMethodStart - wrappedFoldStart + 7), overscan: 0).map(\.number), [3, 4, 5, 6])
         XCTAssertEqual(source, """
         class Example
           def foo
@@ -175,19 +162,19 @@ final class ScopeTests: XCTestCase {
     func testGutterGeometryKeepsMarkerAndNumberZonesSeparateAcrossDigitTransitions() {
         let font = EditorConfiguration.Gutter.font
         let counts = [9, 10, 99, 100]
-        let geometries = counts.map { LineNumberMetrics.gutterGeometry(forLineCount: $0, font: font) }
+        let geometries = counts.map { EditorGutterMetrics.gutterGeometry(forLineCount: $0, font: font) }
 
-        XCTAssertTrue(geometries.allSatisfy { $0.markerZone.width == EditorConfiguration.Gutter.markerZoneWidth })
+        XCTAssertTrue(geometries.allSatisfy { $0.foldMarkerZone.width == EditorConfiguration.Gutter.foldMarkerZoneWidth })
         XCTAssertTrue(geometries.allSatisfy { $0.markerOriginX == geometries[0].markerOriginX })
-        XCTAssertTrue(geometries.allSatisfy { $0.lineNumberZone.minX == $0.markerZone.maxX })
-        XCTAssertTrue(geometries.allSatisfy { $0.separatorZone.width == EditorConfiguration.Gutter.separatorZoneWidth })
+        XCTAssertTrue(geometries.allSatisfy { $0.foldMarkerZone.minX == $0.lineNumberZone.maxX + EditorConfiguration.Gutter.foldMarkerGap })
+        XCTAssertTrue(geometries.allSatisfy { $0.separatorZone.width == EditorConfiguration.Gutter.gutterSeparatorWidth })
 
         for (count, geometry) in zip(counts, geometries) {
             let label = String(count) as NSString
             let labelWidth = ceil(label.size(withAttributes: [.font: font]).width)
             XCTAssertEqual(
                 geometry.lineNumberOriginX(for: labelWidth),
-                geometry.markerZone.maxX + EditorConfiguration.Gutter.markerToNumberSpacing,
+                geometry.lineNumberZone.midX - (labelWidth / 2),
                 accuracy: 0.001
             )
         }
@@ -285,6 +272,57 @@ final class ScopeTests: XCTestCase {
         XCTAssertThrowsError(try document.save()) { error in
             XCTAssertEqual(error as? EditorDocumentError, .noOpenFile)
         }
+    }
+
+    @MainActor func testSessionDeduplicatesOpenFilesAndClosesToAdjacentDocument() throws {
+        let firstURL = try makeTemporaryFile(contents: "first")
+        let secondURL = try makeTemporaryFile(contents: "second")
+        let suiteName = "ScopeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let session = EditorSession(documentSessionStore: DocumentSessionStore(defaults: defaults), restoreSession: false)
+
+        session.open(firstURL, recordRecent: false)
+        session.open(secondURL, recordRecent: false)
+        session.open(firstURL, recordRecent: false)
+
+        XCTAssertEqual(session.documents.count, 2)
+        XCTAssertEqual(session.activeDocument?.fileURL, firstURL.standardizedFileURL)
+        session.close(session.activeDocument!)
+        XCTAssertEqual(session.documents.count, 1)
+        XCTAssertEqual(session.activeDocument?.fileURL, secondURL.standardizedFileURL)
+    }
+
+    func testDocumentSessionStoreRoundTripsActiveDocument() {
+        let defaults = UserDefaults(suiteName: "ScopeTests.\(UUID().uuidString)")!
+        let store = DocumentSessionStore(defaults: defaults)
+        let document = RestorableDocument(id: UUID(), bookmarkData: Data([1, 2]), displayPath: "/tmp/example.rb")
+
+        store.save(.init(documents: [document], activeDocumentID: document.id))
+
+        XCTAssertEqual(store.load(), .init(documents: [document], activeDocumentID: document.id))
+        store.clear()
+        XCTAssertEqual(store.load().documents, [])
+    }
+
+    func testDocumentTabTitleDisambiguatesOnlyDuplicateFilenames() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let firstDirectory = root.appendingPathComponent("one")
+        let secondDirectory = root.appendingPathComponent("two")
+        try FileManager.default.createDirectory(at: firstDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondDirectory, withIntermediateDirectories: true)
+        let firstURL = firstDirectory.appendingPathComponent("example.rb")
+        let secondURL = secondDirectory.appendingPathComponent("example.rb")
+        try "one".write(to: firstURL, atomically: true, encoding: .utf8)
+        try "two".write(to: secondURL, atomically: true, encoding: .utf8)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+
+        let first = EditorDocument(); try first.load(from: firstURL)
+        let second = EditorDocument(); try second.load(from: secondURL)
+
+        XCTAssertEqual(DocumentTabTitle.title(for: first, among: [first, second]), "example.rb — one")
+        XCTAssertEqual(DocumentTabTitle.title(for: second, among: [first, second]), "example.rb — two")
+        XCTAssertEqual(DocumentTabTitle.title(for: first, among: [first]), "example.rb")
     }
 
     private func makeTemporaryFile(contents: String) throws -> URL {
