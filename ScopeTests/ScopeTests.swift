@@ -54,20 +54,55 @@ final class ScopeTests: XCTestCase {
         XCTAssertTrue(SyntaxHighlighter.analyze(language: nil, source: "plain text").foldRanges.isEmpty)
     }
 
-    func testFoldStateAndPresentationRanges() {
+    func testFoldRangeSourceOffsets() {
         let range = FoldRange(startLine: 1, endLine: 3)
         let source = "def example\n  foo\nend\nafter\n"
         XCTAssertEqual(range.hiddenCharacterRange(in: source), NSRange(location: 12, length: 10))
         XCTAssertEqual(range.startCharacterLocation(in: source), 0)
+    }
 
+    func testFoldReconciliationRequiresSurvivingDelimiters() throws {
+        let highlighter = RubySyntaxHighlighter()
+        let original = "def example\n  puts '🔒'\nend\ndef other\n  work\nend"
+        let fold = try XCTUnwrap(highlighter.analyze(original).folds.first)
+        let bodyEdit = SourceEdit(range: (original as NSString).range(of: "puts '🔒'"), text: "if ready\n    work\n  end")
+        let updated = (original as NSString).replacingCharacters(in: bodyEdit.range, with: bodyEdit.text)
         var state = FoldState()
-        state.toggle(range)
-        XCTAssertEqual(state.collapsedRanges, [range])
-        state.retainOnly([])
+        state.collapse(fold)
+        let lines = EditorGutterMetrics.LogicalLineIndex(source: updated)
+        state.rebase(through: [bodyEdit], from: original as NSString, to: updated as NSString) { lines.line(containing: $0)?.number }
         XCTAssertTrue(state.collapsedRanges.isEmpty)
-        state.toggle(range)
-        state.invalidate()
+        state.reconcile(with: highlighter.analyze(updated).folds)
+        XCTAssertEqual(state.collapsedRanges, [FoldRange(startLine: 1, endLine: 5, closingToken: "end")])
+
+        var withoutCloser = state
+        let closingLine = (updated as NSString).range(of: "\nend\ndef other")
+        let removeDelimiter = SourceEdit(range: NSRange(location: closingLine.location + 1, length: 3), text: "")
+        let incomplete = (updated as NSString).replacingCharacters(in: removeDelimiter.range, with: "")
+        let incompleteLines = EditorGutterMetrics.LogicalLineIndex(source: incomplete)
+        withoutCloser.rebase(through: [removeDelimiter], from: updated as NSString, to: incomplete as NSString) {
+            incompleteLines.line(containing: $0)?.number
+        }
+        withoutCloser.reconcile(with: highlighter.analyze(incomplete).folds)
+        XCTAssertTrue(withoutCloser.collapsedRanges.isEmpty)
+
+        // Replacing the first block with an unrelated fold at the same line numbers
+        // must not transfer its collapsed state.
+        let unrelated = "def different\n  if ready\n    work\n  end\nend"
+        let replace = SourceEdit(range: (updated as NSString).range(of: "def example\n  if ready\n    work\n  end\nend"), text: unrelated)
+        let replaced = (updated as NSString).replacingCharacters(in: replace.range, with: replace.text)
+        let replacedLines = EditorGutterMetrics.LogicalLineIndex(source: replaced)
+        state.rebase(through: [replace], from: updated as NSString, to: replaced as NSString) { replacedLines.line(containing: $0)?.number }
+        state.reconcile(with: highlighter.analyze(replaced).folds)
         XCTAssertTrue(state.collapsedRanges.isEmpty)
+    }
+
+    func testProjectionMapsEndOfCollapsedDocumentToSourceEnd() {
+        let source = "def example\n  puts '🔒'\nend"
+        let fold = FoldRange(startLine: 1, endLine: 3, closingToken: "end")
+        let projection = FoldedTextProjection(source: source, collapsedRanges: [fold])
+        XCTAssertEqual(projection.sourceLocation(forPresentationLocation: projection.presentation.utf16.count), source.utf16.count)
+        XCTAssertEqual(projection.presentationLocation(forSourceLocation: source.utf16.count), projection.presentation.utf16.count)
     }
 
     func testStaleHighlightRequestsAreRejected() {
@@ -77,6 +112,8 @@ final class ScopeTests: XCTestCase {
 
         XCTAssertFalse(tracker.accepts(firstRequest, for: "after"))
         XCTAssertTrue(tracker.accepts(latestRequest, for: "after"))
+        let unicode = tracker.makeRequest(for: "café")
+        XCTAssertFalse(tracker.accepts(unicode, for: "cafe\u{301}"))
     }
 
     func testIndentationDetection() {

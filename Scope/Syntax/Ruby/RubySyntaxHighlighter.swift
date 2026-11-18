@@ -25,7 +25,7 @@ struct RubySyntaxHighlighter {
 
             return SyntaxAnalysis(
                 highlightSpans: Self.highlightSpans(in: tree, source: source),
-                foldRanges: Self.foldRanges(in: tree)
+                folds: Self.structuralFolds(in: tree, source: source as NSString)
             )
         } catch {
             return .empty
@@ -58,29 +58,44 @@ struct RubySyntaxHighlighter {
             }
     }
 
-    private static func foldRanges(in tree: MutableTree) -> [FoldRange] {
+    private static func structuralFolds(in tree: MutableTree, source: NSString) -> [StructuralFold] {
         guard let root = tree.rootNode else { return [] }
-        var ranges = Set<FoldRange>()
-        collectFoldRanges(from: root, into: &ranges)
-        return ranges.sorted { lhs, rhs in
-            lhs.startLine == rhs.startLine ? lhs.endLine > rhs.endLine : lhs.startLine < rhs.startLine
+        var folds = [StructuralFold]()
+        collectFolds(from: root, source: source, into: &folds)
+        var seen = Set<FoldRange>()
+        return folds.filter { seen.insert($0.range).inserted }.sorted { lhs, rhs in
+            lhs.range.startLine == rhs.range.startLine
+                ? lhs.range.endLine > rhs.range.endLine
+                : lhs.range.startLine < rhs.range.startLine
         }
     }
 
-    private static func collectFoldRanges(from node: Node, into ranges: inout Set<FoldRange>) {
-        if foldableNodeTypes.contains(node.nodeType ?? ""), !node.hasError {
+    private static func collectFolds(from node: Node, source: NSString, into folds: inout [StructuralFold]) {
+        if let kind = node.nodeType, foldableNodeTypes.contains(kind), !node.hasError,
+           let opener = node.child(at: 0), let closer = node.child(at: node.childCount - 1),
+           opener.range.length > 0, closer.range.length > 0 {
             let range = FoldRange(
                 startLine: Int(node.pointRange.lowerBound.row) + 1,
                 endLine: Int(node.pointRange.upperBound.row) + 1,
                 closingToken: explicitClosingToken(for: node)
             )
             if range.foldedLineCount > 0 {
-                ranges.insert(range)
+                // Endless methods have an expression at their endpoint instead of a delimiter.
+                let closingStart = closer.nodeType == "end" || closer.nodeType == "}"
+                    ? closer.range.location
+                    : closer.range.upperBound - 1
+                var contentsEnd = 0
+                source.getLineStart(nil, end: nil, contentsEnd: &contentsEnd, for: NSRange(location: closingStart, length: 0))
+                folds.append(StructuralFold(range: range, anchors: .init(
+                    kind: kind,
+                    openingToken: opener.range,
+                    closingLineTail: NSRange(location: closingStart, length: contentsEnd - closingStart)
+                )))
             }
         }
 
         node.enumerateChildren { child in
-            collectFoldRanges(from: child, into: &ranges)
+            collectFolds(from: child, source: source, into: &folds)
         }
     }
 

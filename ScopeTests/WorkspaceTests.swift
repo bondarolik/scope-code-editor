@@ -325,6 +325,65 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertFalse(undo.canRedo)
     }
 
+    func testRubyFoldsStayCollapsedAcrossAdjacentEditsAndHistory() async throws {
+        let source = "  # header\ndef first\n  puts '🔒'\nend\n# gap\ndef second\n  work\nend\n# tail\ndef third\n  work\nend"
+        let (view, document, coordinator) = makeEditor(source, language: .ruby)
+        let scroll = NSScrollView()
+        scroll.documentView = view
+        let gutter = EditorGutterView(scrollView: scroll, textView: view)
+        let container = EditorGutterContainerView(scrollView: scroll, gutterView: gutter)
+        let window = NSWindow(contentRect: view.frame, styleMask: .titled, backing: .buffered, defer: false)
+        window.contentView?.addSubview(container)
+        XCTAssertTrue(window.makeFirstResponder(view))
+        let undo = try XCTUnwrap(view.sourceUndoManager)
+        undo.groupsByEvent = false
+        coordinator.scheduleHighlight(for: view)
+        try await waitForFolds(in: gutter, count: 3)
+        coordinator.toggleFold(gutter.foldRanges[0], in: view)
+        coordinator.toggleFold(gutter.foldRanges[1], in: view)
+
+        func checkFolds(_ starts: [Int], file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertEqual(view.foldedSummaries.map(\.foldRange.startLine), starts, file: file, line: line)
+            XCTAssertEqual(gutter.collapsedFoldRanges, Set(view.foldedSummaries.map(\.foldRange)), file: file, line: line)
+            XCTAssertFalse(view.string.contains("puts '🔒'"), file: file, line: line)
+        }
+
+        edit(view, with: "", at: NSRange(location: 0, length: 2), undo: undo)
+        checkFolds([2, 6])
+        edit(view, with: "# 🧑🏽‍💻\n# extra", at: (view.string as NSString).range(of: "# header"), undo: undo)
+        checkFolds([3, 7])
+        edit(view, with: "# gap\n# another line", at: (view.string as NSString).range(of: "# gap"), undo: undo)
+        checkFolds([3, 8])
+        edit(view, with: "# edited tail", at: (view.string as NSString).range(of: "# tail"), undo: undo)
+        checkFolds([3, 8])
+        let edited = document.text
+        XCTAssertEqual(view.sourceSelection.location, (edited as NSString).range(of: "# edited tail").upperBound)
+        XCTAssertTrue(edited.contains("puts '🔒'"))
+
+        for _ in 0..<4 { undo.undo() }
+        XCTAssertEqual(document.text, source)
+        checkFolds([2, 6])
+        for _ in 0..<4 { undo.redo() }
+        XCTAssertEqual(document.text, edited)
+        checkFolds([3, 8])
+
+        try await waitForFolds(in: gutter, count: 3)
+        checkFolds([3, 8])
+        coordinator.toggleFold(try XCTUnwrap(view.foldedSummaries.last).foldRange, in: view)
+        checkFolds([3])
+        undo.undo()
+        checkFolds([3])
+        XCTAssertTrue(document.text.contains("# tail"))
+    }
+
+    private func waitForFolds(in gutter: EditorGutterView, count: Int) async throws {
+        for _ in 0..<100 {
+            if gutter.foldRanges.count == count { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        _ = try XCTUnwrap(gutter.foldRanges.count == count ? gutter.foldRanges : nil, "Expected \(count) folds, found \(gutter.foldRanges.count)")
+    }
+
     func testEditAcrossFoldSummaryCannotRemoveHiddenSourceOrHistory() throws {
         let source = "def hello\n  puts :hidden\nend\nafter"
         let (view, document, coordinator) = makeEditor(source)
@@ -462,13 +521,13 @@ final class WorkspaceTests: XCTestCase {
         undo.endUndoGrouping()
     }
 
-    private func makeEditor(_ source: String, document existingDocument: EditorDocument? = nil) -> (CodeTextView, EditorDocument, NativeTextEditor.Coordinator) {
+    private func makeEditor(_ source: String, document existingDocument: EditorDocument? = nil, language: LanguageID? = nil) -> (CodeTextView, EditorDocument, NativeTextEditor.Coordinator) {
         let document = existingDocument ?? EditorDocument()
         document.updateText(source)
         let coordinator = NativeTextEditor.Coordinator(
             text: Binding(get: { document.text }, set: document.updateText),
             status: .constant(EditorStatus()),
-            language: nil,
+            language: language,
             indentationWidth: 2,
             caretSourceOffset: Binding(get: { document.caretSourceOffset }, set: document.updateCaretSourceOffset),
             navigationTarget: .constant(nil)

@@ -15,7 +15,7 @@ struct HighlightRequestTracker {
     }
 
     func accepts(_ request: HighlightRequest, for currentSource: String) -> Bool {
-        request.generation == currentGeneration && request.source == currentSource
+        request.generation == currentGeneration && request.source.utf16.elementsEqual(currentSource.utf16)
     }
 }
 
@@ -103,10 +103,7 @@ struct NativeTextEditor: NSViewRepresentable {
         let scrollView = containerView.scrollView
         guard let textView = scrollView.documentView as? CodeTextView else { return }
         if !textView.canonicalSource.utf16.elementsEqual(text.utf16) {
-            textView.applyProjection(source: text, collapsedRanges: [])
-            containerView.gutterView.updateSourceText(text)
-            context.coordinator.updateStatus(from: textView)
-            context.coordinator.scheduleHighlight(for: textView)
+            context.coordinator.replaceSource(text, in: textView)
         }
         context.coordinator.updateActivation(isActive, in: textView)
     }
@@ -119,16 +116,12 @@ struct NativeTextEditor: NSViewRepresentable {
         private var caretSourceOffset: Binding<Int>
         private var navigationTarget: Binding<Int?>
         private var highlightRequests = HighlightRequestTracker()
-        private var foldRanges = [FoldRange]()
+        private var analyzedFolds = [StructuralFold]()
         private var foldState = FoldState()
         private var highlightSpans = [HighlightSpan]()
-        private struct Replacement {
-            let range: NSRange
-            let text: String
-        }
 
         private struct PendingEdit {
-            let replacements: [Replacement]
+            let replacements: [SourceEdit]
             let selection: NSRange
         }
 
@@ -177,11 +170,11 @@ struct NativeTextEditor: NSViewRepresentable {
             if view.isComposing { return true }
 
             let source = view.canonicalSource as NSString
-            var replacements: [Replacement] = []
+            var replacements: [SourceEdit] = []
             for (range, replacement) in zip(affectedRanges, replacementStrings) {
                 guard let sourceRange = view.editableSourceRange(forPresentationRange: range.rangeValue),
                       source.isUTF16Boundary(sourceRange.location), source.isUTF16Boundary(sourceRange.upperBound) else { return false }
-                replacements.append(Replacement(range: sourceRange, text: replacement))
+                replacements.append(SourceEdit(range: sourceRange, text: replacement))
             }
             pendingEdit = PendingEdit(replacements: replacements, selection: view.sourceSelection)
             return true
@@ -195,17 +188,26 @@ struct NativeTextEditor: NSViewRepresentable {
         }
 
         fileprivate func commitComposition(_ replacement: String, in range: NSRange, restoring selection: NSRange, from view: CodeTextView) {
-            apply([Replacement(range: range, text: replacement)], restoring: selection, selecting: nil, in: view)
+            if (view.canonicalSource as NSString).substring(with: range).utf16.elementsEqual(replacement.utf16) {
+                restorePresentation(afterComposition: selection, in: view)
+            } else {
+                apply([SourceEdit(range: range, text: replacement)], restoring: selection, selecting: nil, in: view)
+            }
+        }
+
+        fileprivate func restorePresentation(afterComposition selection: NSRange, in view: CodeTextView) {
+            applyFoldPresentation(to: view, selection: selection)
+            updateSelection(from: view)
         }
 
         private func apply(
-            _ replacements: [Replacement],
+            _ replacements: [SourceEdit],
             restoring previousSelection: NSRange,
             selecting nextSelection: NSRange?,
             in view: CodeTextView
         ) {
             let source = view.canonicalSource as NSString
-            var inverse: [Replacement] = []
+            var inverse: [SourceEdit] = []
             var delta = 0
             var end = 0
             for replacement in replacements {
@@ -214,7 +216,7 @@ struct NativeTextEditor: NSViewRepresentable {
                       range.length >= 0, range.length <= source.length - range.location,
                       source.isUTF16Boundary(range.location), source.isUTF16Boundary(range.upperBound) else { return }
                 let insertedLength = replacement.text.utf16.count
-                inverse.append(Replacement(
+                inverse.append(SourceEdit(
                     range: NSRange(location: range.location + delta, length: insertedLength),
                     text: source.substring(with: range)
                 ))
@@ -234,16 +236,29 @@ struct NativeTextEditor: NSViewRepresentable {
                 guard let view else { return }
                 coordinator.apply(inverse, restoring: selection, selecting: previousSelection, in: view)
             }
-            synchronizeSource(newSource, selection: selection, in: view)
+            let lines = EditorGutterMetrics.LogicalLineIndex(source: newSource)
+            foldState.rebase(through: replacements, from: source, to: updated) { lines.line(containing: $0)?.number }
+            text.wrappedValue = newSource
+            synchronizeSource(newSource, lines: lines, selection: selection, in: view)
         }
 
-        private func synchronizeSource(_ updatedSource: String, selection: NSRange, in textView: CodeTextView) {
-            text.wrappedValue = updatedSource
-            foldState.invalidate()
-            foldRanges = []
+        func replaceSource(_ source: String, in textView: CodeTextView) {
+            pendingEdit = nil
+            textView.discardComposition()
+            foldState = FoldState()
+            synchronizeSource(source, lines: .init(source: source), selection: nil, in: textView)
+        }
+
+        private func synchronizeSource(
+            _ updatedSource: String,
+            lines: EditorGutterMetrics.LogicalLineIndex,
+            selection: NSRange?,
+            in textView: CodeTextView
+        ) {
+            analyzedFolds = []
             highlightSpans = []
+            gutter(for: textView)?.updateSourceLines(lines)
             applyFoldPresentation(to: textView, source: updatedSource, selection: selection)
-            gutter(for: textView)?.updateSourceText(updatedSource)
             updateSelection(from: textView)
             scheduleHighlight(for: textView)
         }
@@ -294,41 +309,46 @@ struct NativeTextEditor: NSViewRepresentable {
                     guard let self, let textView,
                           let codeTextView = textView as? CodeTextView,
                           self.highlightRequests.accepts(request, for: codeTextView.canonicalSource) else { return }
-                    self.foldRanges = analysis.foldRanges
-                    self.foldState.retainOnly(analysis.foldRanges)
+                    self.analyzedFolds = analysis.folds
+                    self.foldState.reconcile(with: analysis.folds)
                     self.highlightSpans = analysis.highlightSpans
                     self.applyFoldPresentation(to: textView)
+                    if !codeTextView.isComposing { self.updateSelection(from: codeTextView) }
                 }
             }
         }
 
         func toggleFold(_ range: FoldRange, in textView: NSTextView) {
-            guard let view = textView as? CodeTextView, !view.isComposing, foldRanges.contains(range) else { return }
-            let willCollapse = !foldState.collapsedRanges.contains(range)
-            if willCollapse,
-               let sourceLocation = (textView as? CodeTextView)?.sourceLocation(forPresentationLocation: textView.selectedRange().location),
-               let hiddenRange = range.hiddenCharacterRange(in: (textView as? CodeTextView)?.canonicalSource ?? textView.string),
-               NSLocationInRange(sourceLocation, hiddenRange),
-               let start = range.startCharacterLocation(in: (textView as? CodeTextView)?.canonicalSource ?? textView.string),
-               let presentationStart = (textView as? CodeTextView)?.presentationLocation(forSourceLocation: start) {
-                textView.setSelectedRange(NSRange(location: presentationStart, length: 0))
-                updateStatus(from: textView)
+            guard let view = textView as? CodeTextView, !view.isComposing else { return }
+            if !foldState.expand(range) {
+                guard let fold = analyzedFolds.first(where: { $0.range == range }) else { return }
+                if let hiddenRange = range.hiddenCharacterRange(in: view.canonicalSource),
+                   NSLocationInRange(view.sourceSelection.location, hiddenRange),
+                   let presentationStart = view.presentationLocation(forSourceLocation: fold.anchors.openingToken.location) {
+                    textView.setSelectedRange(NSRange(location: presentationStart, length: 0))
+                }
+                foldState.collapse(fold)
             }
-            foldState.toggle(range)
             applyFoldPresentation(to: textView)
+            updateSelection(from: view)
         }
 
         private func applyFoldPresentation(to textView: NSTextView, source: String? = nil, selection: NSRange? = nil) {
             guard let codeTextView = textView as? CodeTextView, !codeTextView.isComposing else { return }
-            codeTextView.applyProjection(
-                source: source ?? codeTextView.canonicalSource,
-                collapsedRanges: foldState.collapsedRanges,
-                sourceSelection: selection
-            )
+            let collapsed = foldState.collapsedRanges
+            if source != nil || selection != nil || codeTextView.projection.collapsedRanges != collapsed {
+                codeTextView.applyProjection(
+                    source: source ?? codeTextView.canonicalSource,
+                    collapsedRanges: collapsed,
+                    sourceSelection: selection
+                )
+            }
             applyHighlighting(highlightSpans, to: codeTextView)
             if let gutter = gutter(for: textView) {
-                gutter.foldRanges = foldRanges
-                gutter.collapsedFoldRanges = foldState.collapsedRanges
+                gutter.foldRanges = analyzedFolds.isEmpty
+                    ? collapsed.sorted { $0.endLine > $1.endLine }
+                    : analyzedFolds.map(\.range)
+                gutter.collapsedFoldRanges = collapsed
             }
         }
 
@@ -416,6 +436,12 @@ final class CodeTextView: NSTextView {
         handleTextInput { super.unmarkText() }
     }
 
+    fileprivate func discardComposition() {
+        guard isComposing else { return }
+        composition = nil
+        inputContext?.discardMarkedText()
+    }
+
     private func handleTextInput(_ input: () -> Void) {
         let wasHandlingInput = isHandlingTextInput
         isHandlingTextInput = true
@@ -438,7 +464,7 @@ final class CodeTextView: NSTextView {
               original.substring(from: composition.presentationRange.upperBound).utf16.elementsEqual(
                   presented.substring(from: presented.length - suffixLength).utf16
               ) else {
-            applyProjection(source: canonicalSource, collapsedRanges: Set(foldedSummaries.map(\.foldRange)), sourceSelection: composition.selection)
+            (delegate as? NativeTextEditor.Coordinator)?.restorePresentation(afterComposition: composition.selection, in: self)
             return
         }
         let replacement = presented.substring(with: NSRange(location: start, length: presented.length - start - suffixLength))

@@ -62,9 +62,23 @@ struct FoldRange: Equatable, Hashable {
     }
 }
 
+struct StructuralFold {
+    struct Anchors: Hashable {
+        let kind: String
+        let openingToken: NSRange
+        // The projection hides the entire closing line, so protect its suffix too.
+        let closingLineTail: NSRange
+    }
+
+    let range: FoldRange
+    let anchors: Anchors
+}
+
 struct SyntaxAnalysis {
     let highlightSpans: [HighlightSpan]
-    let foldRanges: [FoldRange]
+    let folds: [StructuralFold]
 
-    static let empty = SyntaxAnalysis(highlightSpans: [], foldRanges: [])
+    var foldRanges: [FoldRange] { folds.map(\.range) }
+
+    static let empty = SyntaxAnalysis(highlightSpans: [], folds: [])
 }

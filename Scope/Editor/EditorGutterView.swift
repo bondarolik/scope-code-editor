@@ -159,7 +159,9 @@ final class EditorGutterView: NSView {
     weak var scrollView: NSScrollView?
     var foldRanges = [FoldRange]() {
         didSet {
-            foldRangesByStartLine = Dictionary(uniqueKeysWithValues: foldRanges.map { ($0.startLine, $0) })
+            guard oldValue != foldRanges else { return }
+            foldRangesByStartLine = Dictionary(grouping: foldRanges, by: \.startLine)
+            disclosureFrames.removeAll()
             needsDisplay = true
         }
     }
@@ -170,7 +172,7 @@ final class EditorGutterView: NSView {
     var onWidthChange: ((CGFloat) -> Void)?
 
     private var logicalLineIndex: EditorGutterMetrics.LogicalLineIndex
-    private var foldRangesByStartLine = [Int: FoldRange]()
+    private var foldRangesByStartLine = [Int: [FoldRange]]()
     private var disclosureFrames = [(frame: NSRect, range: FoldRange)]()
     private var boundsObserver: NSObjectProtocol?
 
@@ -209,8 +211,8 @@ final class EditorGutterView: NSView {
         }
     }
 
-    func updateSourceText(_ source: String) {
-        logicalLineIndex = EditorGutterMetrics.LogicalLineIndex(source: source)
+    func updateSourceLines(_ lines: EditorGutterMetrics.LogicalLineIndex) {
+        logicalLineIndex = lines
         notifyWidthChange()
         needsDisplay = true
     }
@@ -252,7 +254,8 @@ final class EditorGutterView: NSView {
                 ]
             )
 
-            if let range = foldRangesByStartLine[line.number] {
+            if let ranges = foldRangesByStartLine[line.number],
+               let range = ranges.first(where: collapsedFoldRanges.contains) ?? ranges.first {
                 let frame = NSRect(
                     x: geometry.markerOriginX,
                     y: lineY + ((lineFragment.height - EditorConfiguration.Gutter.foldMarkerWidth) / 2),
