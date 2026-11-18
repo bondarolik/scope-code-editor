@@ -22,6 +22,7 @@ struct FoldedTextProjection {
     }
 
     let source: String
+    let collapsedRanges: Set<FoldRange>
     let presentation: String
     let summaries: [Summary]
     private let segments: [Segment]
@@ -29,31 +30,54 @@ struct FoldedTextProjection {
     init(source: String, collapsedRanges: Set<FoldRange>) {
         self.source = source
         let text = source as NSString
-        let collapsed = Self.outermostCollapsedRanges(collapsedRanges, in: source)
+        self.collapsedRanges = collapsedRanges
+        let collapsed = collapsedRanges.sorted { lhs, rhs in
+            lhs.startLine == rhs.startLine ? lhs.endLine > rhs.endLine : lhs.startLine < rhs.startLine
+        }
         var rendered = ""
         var builtSegments = [Segment]()
         var builtSummaries = [Summary]()
         var sourceLocation = 0
 
+        var line = 1
+        var lineStart = 0
+        var lastFoldEndLine = 0
+        func bounds(of target: Int) -> (start: Int, contentsEnd: Int, end: Int)? {
+            var end = 0
+            var contentsEnd = 0
+            while lineStart < text.length {
+                text.getLineStart(nil, end: &end, contentsEnd: &contentsEnd, for: NSRange(location: lineStart, length: 0))
+                if line == target { return (lineStart, contentsEnd, end) }
+                lineStart = end
+                line += 1
+            }
+            return nil
+        }
+
         for foldRange in collapsed {
-            guard let replacement = foldRange.presentationReplacement(in: source),
-                  replacement.sourceRange.location >= sourceLocation else { continue }
+            guard foldRange.startLine > lastFoldEndLine, foldRange.endLine > foldRange.startLine,
+                  let opening = bounds(of: foldRange.startLine), let closing = bounds(of: foldRange.endLine) else { continue }
+            lastFoldEndLine = foldRange.endLine
+            let hidden = NSRange(location: opening.contentsEnd, length: closing.end - opening.contentsEnd)
+            let lineEnding = text.substring(with: NSRange(location: closing.contentsEnd, length: closing.end - closing.contentsEnd))
+            let separator = EditorConfiguration.Folding.summarySeparator
+            let summaryText = separator + "…" + (foldRange.closingToken.map { separator + $0 } ?? "") + lineEnding
 
             Self.appendSource(
-                NSRange(location: sourceLocation, length: replacement.sourceRange.location - sourceLocation),
+                NSRange(location: sourceLocation, length: hidden.location - sourceLocation),
                 from: text,
                 into: &rendered,
                 segments: &builtSegments
             )
 
-            let presentationStart = (rendered as NSString).length
-            rendered += replacement.text
-            let presentationRange = NSRange(location: presentationStart, length: (replacement.text as NSString).length)
-            let ellipsisLocation = presentationStart + replacement.leadingSeparatorLength
+            let presentationStart = builtSegments.last?.presentationRange.upperBound ?? 0
+            rendered += summaryText
+            let presentationRange = NSRange(location: presentationStart, length: (summaryText as NSString).length)
+            let ellipsisLocation = presentationStart + separator.utf16.count
             let ellipsisRange = NSRange(location: ellipsisLocation, length: ("…" as NSString).length)
-            let closingTokenRange = replacement.closingToken.map {
+            let closingTokenRange = foldRange.closingToken.map {
                 NSRange(
-                    location: ellipsisRange.upperBound + replacement.interTokenSeparatorLength,
+                    location: ellipsisRange.upperBound + separator.utf16.count,
                     length: ($0 as NSString).length
                 )
             }
@@ -62,12 +86,12 @@ struct FoldedTextProjection {
                 presentationRange: presentationRange,
                 ellipsisRange: ellipsisRange,
                 closingTokenRange: closingTokenRange,
-                sourceRange: replacement.sourceRange,
-                safeSourceLocation: replacement.safeSourceLocation
+                sourceRange: hidden,
+                safeSourceLocation: opening.start
             )
             builtSummaries.append(summary)
-            builtSegments.append(Segment(sourceRange: replacement.sourceRange, presentationRange: presentationRange, kind: .summary(summary)))
-            sourceLocation = replacement.sourceRange.upperBound
+            builtSegments.append(Segment(sourceRange: hidden, presentationRange: presentationRange, kind: .summary(summary)))
+            sourceLocation = hidden.upperBound
         }
 
         Self.appendSource(
@@ -83,6 +107,7 @@ struct FoldedTextProjection {
     }
 
     func sourceLocation(forPresentationLocation location: Int) -> Int {
+        if let last = segments.last, location == last.presentationRange.upperBound { return last.sourceRange.upperBound }
         guard let segment = segments.first(where: { NSLocationInRange(location, $0.presentationRange) }) ?? segments.first(where: { location == $0.presentationRange.upperBound }) else {
             return (source as NSString).length
         }
@@ -95,6 +120,7 @@ struct FoldedTextProjection {
     }
 
     func presentationLocation(forSourceLocation location: Int) -> Int? {
+        if let last = segments.last, location == last.sourceRange.upperBound { return last.presentationRange.upperBound }
         guard let segment = segments.first(where: { NSLocationInRange(location, $0.sourceRange) }) ?? segments.first(where: { location == $0.sourceRange.upperBound }) else {
             return nil
         }
@@ -155,73 +181,14 @@ struct FoldedTextProjection {
         segments: inout [Segment]
     ) {
         guard range.length > 0 else { return }
-        let presentationStart = (rendered as NSString).length
-        let fragment = text.substring(with: range)
-        rendered += fragment
+        let presentationStart = segments.last?.presentationRange.upperBound ?? 0
+        rendered += text.substring(with: range)
         segments.append(
             Segment(
                 sourceRange: range,
-                presentationRange: NSRange(location: presentationStart, length: (fragment as NSString).length),
+                presentationRange: NSRange(location: presentationStart, length: range.length),
                 kind: .source
             )
         )
-    }
-
-    private static func outermostCollapsedRanges(_ ranges: Set<FoldRange>, in source: String) -> [FoldRange] {
-        ranges.sorted { lhs, rhs in
-            lhs.startLine == rhs.startLine ? lhs.endLine > rhs.endLine : lhs.startLine < rhs.startLine
-        }.filter { candidate in
-            !ranges.contains { enclosing in
-                enclosing.startLine < candidate.startLine && enclosing.endLine >= candidate.endLine
-            }
-        }
-    }
-}
-
-private extension FoldRange {
-    struct PresentationReplacement {
-        let sourceRange: NSRange
-        let text: String
-        let leadingSeparatorLength: Int
-        let interTokenSeparatorLength: Int
-        let closingToken: String?
-        let safeSourceLocation: Int
-    }
-
-    func presentationReplacement(in source: String) -> PresentationReplacement? {
-        let text = source as NSString
-        guard startLine >= 1, endLine > startLine, text.length > 0 else { return nil }
-
-        var line = 1
-        var location = 0
-        var lineStart = 0
-        var lineEnd = 0
-        var contentsEnd = 0
-        var openingContentsEnd: Int?
-        var openingStart: Int?
-
-        while location < text.length {
-            text.getLineStart(&lineStart, end: &lineEnd, contentsEnd: &contentsEnd, for: NSRange(location: location, length: 0))
-            if line == startLine {
-                openingContentsEnd = contentsEnd
-                openingStart = lineStart
-            }
-            if line == endLine, let openingContentsEnd, let openingStart {
-                let preservedLineEnding = text.substring(with: NSRange(location: contentsEnd, length: lineEnd - contentsEnd))
-                let separator = EditorConfiguration.Folding.summarySeparator
-                let summary = separator + "…" + (closingToken.map { separator + $0 } ?? "") + preservedLineEnding
-                return PresentationReplacement(
-                    sourceRange: NSRange(location: openingContentsEnd, length: lineEnd - openingContentsEnd),
-                    text: summary,
-                    leadingSeparatorLength: (separator as NSString).length,
-                    interTokenSeparatorLength: closingToken == nil ? 0 : (separator as NSString).length,
-                    closingToken: closingToken,
-                    safeSourceLocation: openingStart
-                )
-            }
-            location = lineEnd
-            line += 1
-        }
-        return nil
     }
 }
