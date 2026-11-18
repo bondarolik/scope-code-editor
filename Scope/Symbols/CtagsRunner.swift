@@ -1,8 +1,8 @@
 import Foundation
 
-struct SymbolEntry: Identifiable, Hashable { let name: String; let kind: String; let fileURL: URL; let relativePath: String; let line: Int; var id: String { "\\(fileURL.path):\\(line):\\(name):\\(kind)" } }
-struct SymbolIndex { let entries: [SymbolEntry]; static let empty = SymbolIndex(entries: []); func lookup(_ name: String) -> [SymbolEntry] { entries.filter { $0.name == name } } }
-enum CtagsRunner {
+nonisolated struct SymbolEntry: Identifiable, Hashable, Sendable { let name: String; let kind: String; let fileURL: URL; let relativePath: String; let line: Int; var id: String { "\\(fileURL.path):\\(line):\\(name):\\(kind)" } }
+nonisolated struct SymbolIndex: Sendable { let entries: [SymbolEntry]; static let empty = SymbolIndex(entries: []); func lookup(_ name: String) -> [SymbolEntry] { entries.filter { $0.name == name } } }
+nonisolated enum CtagsRunner {
     static func buildIndex(rootURL: URL) -> SymbolIndex {
         guard let helper = Bundle.main.url(forResource: "ctags", withExtension: nil, subdirectory: "Tools"), validate(helper) else { return .empty }
         let process = Process(); let output = Pipe(); let errors = Pipe()

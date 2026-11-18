@@ -6,46 +6,59 @@ struct ProjectSidebar: View {
     let openFile: (URL) -> Void
 
     var body: some View {
-        List {
-            ForEach(project.treeRoots) { node in
-                ProjectTreeRow(node: node, project: project, activeFileURL: activeFileURL, openFile: openFile)
+        switch project.state {
+        case .scanning:
+            ProgressView("Scanning project…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failed(let message):
+            VStack(spacing: 8) {
+                Text("Couldn’t Read Project")
+                Text(message).font(.caption).foregroundStyle(.secondary)
             }
-        }
-        .listStyle(.sidebar)
-    }
-}
-
-private struct ProjectTreeRow: View {
-    let node: ProjectTreeNode
-    @ObservedObject var project: ProjectContext
-    let activeFileURL: URL?
-    let openFile: (URL) -> Void
-    var depth = 0
-
-    var body: some View {
-        if node.isDirectory {
-            Button { toggleDirectory() } label: {
-                Label(node.name, systemImage: project.expandedDirectories.contains(node.url) ? "chevron.down" : "chevron.right")
-                    .padding(.leading, CGFloat(depth) * 14)
-            }
-            .buttonStyle(.plain)
-            if project.expandedDirectories.contains(node.url) {
-                ForEach(node.children ?? []) { child in
-                    ProjectTreeRow(node: child, project: project, activeFileURL: activeFileURL, openFile: openFile, depth: depth + 1)
+            .multilineTextAlignment(.center)
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .loaded(let scan):
+            List(visibleRows(scan.treeRoots)) { row in
+                Button {
+                    if row.node.isDirectory { project.toggleDirectory(row.node.url) }
+                    else { openFile(row.node.url) }
+                } label: {
+                    Label(row.node.name, systemImage: symbol(for: row.node))
+                        .padding(.leading, CGFloat(row.depth) * 14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .listRowBackground(isActive(row.node) ? Color.accentColor.opacity(0.14) : Color.clear)
             }
-        } else {
-            Button { openFile(node.url) } label: {
-                Label(node.name, systemImage: "doc")
-                    .padding(.leading, CGFloat(depth) * 14)
-            }
-            .buttonStyle(.plain)
-            .listRowBackground(node.url == activeFileURL ? Color.accentColor.opacity(0.14) : Color.clear)
+            .listStyle(.sidebar)
         }
     }
 
-    private func toggleDirectory() {
-        if project.expandedDirectories.contains(node.url) { project.expandedDirectories.remove(node.url) }
-        else { project.expandedDirectories.insert(node.url) }
+    private struct Row: Identifiable {
+        let node: ProjectTreeNode
+        let depth: Int
+        var id: URL { node.id }
+    }
+
+    private func visibleRows(_ nodes: [ProjectTreeNode], depth: Int = 0) -> [Row] {
+        var rows: [Row] = []
+        for node in nodes {
+            rows.append(Row(node: node, depth: depth))
+            if project.expandedDirectories.contains(node.url) {
+                rows.append(contentsOf: visibleRows(node.children, depth: depth + 1))
+            }
+        }
+        return rows
+    }
+
+    private func symbol(for node: ProjectTreeNode) -> String {
+        guard node.isDirectory else { return "doc" }
+        return project.expandedDirectories.contains(node.url) ? "chevron.down" : "chevron.right"
+    }
+
+    private func isActive(_ node: ProjectTreeNode) -> Bool {
+        !node.isDirectory && node.url.standardizedFileURL == activeFileURL?.standardizedFileURL
     }
 }

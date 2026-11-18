@@ -107,14 +107,18 @@ struct FoldedTextProjection {
     }
 
     func editableSourceRange(forPresentationRange range: NSRange) -> NSRange? {
-        guard !summaries.contains(where: {
-            range.location >= $0.presentationRange.location && range.location <= $0.presentationRange.upperBound
-        }) else {
-            return nil
+        if source.isEmpty, range == NSRange(location: 0, length: 0) { return range }
+        let length = segments.last?.presentationRange.upperBound ?? 0
+        guard range.location >= 0, range.length >= 0,
+              range.location <= length, range.length <= length - range.location else { return nil }
+        // A fold summary is read-only, but an edit may start or end at its visible boundary.
+        if range.length == 0, range.location == length {
+            return NSRange(location: segments.last?.sourceRange.upperBound ?? 0, length: 0)
         }
-        guard let segment = segments.first(where: {
-            range.location >= $0.presentationRange.location && range.upperBound <= $0.presentationRange.upperBound
-        }), case .source = segment.kind else {
+        guard let segment = segments.first(where: { segment in
+            guard case .source = segment.kind else { return false }
+            return range.location >= segment.presentationRange.location && range.upperBound <= segment.presentationRange.upperBound
+        }) else {
             return nil
         }
         return NSRange(

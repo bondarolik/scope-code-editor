@@ -1,6 +1,7 @@
 import XCTest
 @testable import Scope
 
+@MainActor
 final class ScopeTests: XCTestCase {
     func testRubySyntaxDetectionAndParsing() {
         let highlighter = RubySyntaxHighlighter()
@@ -274,7 +275,7 @@ final class ScopeTests: XCTestCase {
         }
     }
 
-    @MainActor func testSessionDeduplicatesOpenFilesAndClosesToAdjacentDocument() throws {
+    func testSessionDeduplicatesOpenFilesAndClosesToAdjacentDocument() throws {
         let firstURL = try makeTemporaryFile(contents: "first")
         let secondURL = try makeTemporaryFile(contents: "second")
         let suiteName = "ScopeTests.\(UUID().uuidString)"
